@@ -27,9 +27,11 @@ type Scheduler struct {
 	tracker        *health.Tracker
 	notifier       *notify.Notifier
 	engineResolver EngineResolver
+	logBuffer      *health.LogBuffer
 
 	mu          sync.Mutex
 	runningJobs map[string]bool
+	entryIDs    map[string]cron.EntryID
 }
 
 // NewScheduler creates a new Scheduler.
@@ -48,18 +50,47 @@ func NewScheduler(cfg *config.AppConfig, tracker *health.Tracker, notifier *noti
 		notifier:       notifier,
 		engineResolver: resolver,
 		runningJobs:    make(map[string]bool),
+		entryIDs:       make(map[string]cron.EntryID),
 	}
+}
+
+// SetLogBuffer attaches an in-memory LogBuffer for tracking recent logs per job.
+func (s *Scheduler) SetLogBuffer(buffer *health.LogBuffer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logBuffer = buffer
+}
+
+// GetLogBuffer returns the attached LogBuffer.
+func (s *Scheduler) GetLogBuffer() *health.LogBuffer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.logBuffer
+}
+
+// GetConfig returns a pointer to the current active configuration.
+func (s *Scheduler) GetConfig() *config.AppConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.config
 }
 
 // Start schedules all configured jobs and begins cron execution.
 func (s *Scheduler) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.startLocked()
+}
+
+func (s *Scheduler) startLocked() error {
 	for _, job := range s.config.Jobs {
 		jobCopy := job // capture loop variable
 
 		log.Printf("[scheduler] registering job %q (engine: %s, schedule: %q, retention: %d days)",
 			jobCopy.Name, jobCopy.Engine, jobCopy.Schedule, jobCopy.RetentionDays)
 
-		_, err := s.cron.AddFunc(jobCopy.Schedule, func() {
+		id, err := s.cron.AddFunc(jobCopy.Schedule, func() {
 			go func() {
 				ctx := context.Background()
 				if err := s.RunJob(ctx, jobCopy); err != nil {
@@ -70,6 +101,7 @@ func (s *Scheduler) Start() error {
 		if err != nil {
 			return fmt.Errorf("failed to schedule job %q with cron expression %q: %w", jobCopy.Name, jobCopy.Schedule, err)
 		}
+		s.entryIDs[jobCopy.Name] = id
 	}
 
 	s.cron.Start()
@@ -79,7 +111,52 @@ func (s *Scheduler) Start() error {
 
 // Stop terminates the cron scheduler.
 func (s *Scheduler) Stop() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.cron.Stop()
+}
+
+// Reload stops the current cron scheduler, reapplies new configuration jobs, and starts anew.
+func (s *Scheduler) Reload(newCfg *config.AppConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	log.Printf("[scheduler] reloading scheduler with %d new job configuration(s)...", len(newCfg.Jobs))
+	s.cron.Stop()
+
+	s.cron = cron.New()
+	s.config = newCfg
+	s.entryIDs = make(map[string]cron.EntryID)
+
+	if s.tracker != nil {
+		if err := s.tracker.SyncJobs(newCfg.Jobs); err != nil {
+			log.Printf("[scheduler] warning: tracker sync failed during reload: %v", err)
+		}
+	}
+
+	return s.startLocked()
+}
+
+// IsJobRunning reports whether the specified job is actively executing a backup.
+func (s *Scheduler) IsJobRunning(jobName string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runningJobs[jobName]
+}
+
+// GetNextRun returns the next scheduled run time for the specified job.
+func (s *Scheduler) GetNextRun(jobName string) *time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id, ok := s.entryIDs[jobName]
+	if !ok {
+		return nil
+	}
+
+	entry := s.cron.Entry(id)
+	next := entry.Next
+	return &next
 }
 
 // RunJob executes a single backup run for the specified job.
@@ -87,7 +164,7 @@ func (s *Scheduler) RunJob(ctx context.Context, job config.JobConfig) error {
 	s.mu.Lock()
 	if s.runningJobs[job.Name] {
 		s.mu.Unlock()
-		log.Printf("[scheduler] job %q is already running; skipping scheduled run", job.Name)
+		s.logJob(job.Name, "[scheduler] job %q is already running; skipping run", job.Name)
 		return fmt.Errorf("job %q is already running", job.Name)
 	}
 	s.runningJobs[job.Name] = true
@@ -99,7 +176,7 @@ func (s *Scheduler) RunJob(ctx context.Context, job config.JobConfig) error {
 		s.mu.Unlock()
 	}()
 
-	log.Printf("[scheduler] starting backup job %q (engine: %s)", job.Name, job.Engine)
+	s.logJob(job.Name, "[scheduler] starting backup job %q (engine: %s)", job.Name, job.Engine)
 	_ = s.tracker.RecordStart(job.Name)
 
 	now := time.Now()
@@ -143,15 +220,15 @@ func (s *Scheduler) RunJob(ctx context.Context, job config.JobConfig) error {
 	}
 
 	_ = s.tracker.RecordSuccess(job.Name, durationMs, fileSize, filename)
-	log.Printf("[scheduler] backup job %q SUCCESS in %dms (file: %s, size: %d bytes)",
+	s.logJob(job.Name, "[scheduler] backup job %q SUCCESS in %dms (file: %s, size: %d bytes)",
 		job.Name, durationMs, filename, fileSize)
 
 	// 4. Retention cleanup
 	deleted, pruneErr := retention.Prune(jobDir, job.Name, job.RetentionDays, now)
 	if pruneErr != nil {
-		log.Printf("[retention] warning: pruning failed for job %q: %v", job.Name, pruneErr)
+		s.logJob(job.Name, "[retention] warning: pruning failed for job %q: %v", job.Name, pruneErr)
 	} else if len(deleted) > 0 {
-		log.Printf("[retention] pruned %d expired backup(s) for job %q", len(deleted), job.Name)
+		s.logJob(job.Name, "[retention] pruned %d expired backup(s) for job %q", len(deleted), job.Name)
 	}
 
 	// 5. Success webhook notification
@@ -181,7 +258,7 @@ func (s *Scheduler) handleFailure(job config.JobConfig, startTime time.Time, err
 	_ = s.tracker.RecordFailure(job.Name, durationMs, err)
 
 	sanitizedErr := config.RedactURL(err.Error())
-	log.Printf("[scheduler] backup job %q FAILED in %dms: %s", job.Name, durationMs, sanitizedErr)
+	s.logJob(job.Name, "[scheduler] backup job %q FAILED in %dms: %s", job.Name, durationMs, sanitizedErr)
 
 	if job.WebhookURL != "" {
 		s.notifier.Dispatch(job.WebhookURL, notify.Event{
@@ -192,5 +269,18 @@ func (s *Scheduler) handleFailure(job config.JobConfig, startTime time.Time, err
 			DurationMs: durationMs,
 			Error:      sanitizedErr,
 		})
+	}
+}
+
+func (s *Scheduler) logJob(jobName, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	log.Print(msg)
+
+	s.mu.Lock()
+	buf := s.logBuffer
+	s.mu.Unlock()
+
+	if buf != nil && jobName != "" {
+		buf.Add(jobName, msg)
 	}
 }

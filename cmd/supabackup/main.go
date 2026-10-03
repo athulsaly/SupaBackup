@@ -8,15 +8,17 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"supabackup/internal/config"
 	"supabackup/internal/health"
 	"supabackup/internal/notify"
 	"supabackup/internal/scheduler"
+	"supabackup/internal/web"
 )
 
 var (
-	version = "0.1.0-mvp"
+	version = "0.2.0"
 )
 
 func main() {
@@ -54,11 +56,39 @@ func runDaemon() {
 		log.Fatalf("[supabackup] fatal: status tracker initialization failed: %v", err)
 	}
 
+	logBuf := health.NewLogBuffer(100)
 	notifier := notify.NewNotifier(nil)
 	sched := scheduler.NewScheduler(cfg, tracker, notifier, nil)
+	sched.SetLogBuffer(logBuf)
 
 	if err := sched.Start(); err != nil {
 		log.Fatalf("[supabackup] fatal: failed to start scheduler: %v", err)
+	}
+
+	var webServer *web.Server
+	dashPass, err := config.ResolveSecret("DASHBOARD_PASSWORD")
+	if err != nil {
+		log.Printf("[web] warning resolving DASHBOARD_PASSWORD: %v", err)
+	}
+	if dashPass != "" {
+		sc := &web.ServerContext{
+			StartTime:  time.Now(),
+			Config:     cfg,
+			Tracker:    tracker,
+			Scheduler:  sched,
+			LogBuffer:  logBuf,
+			Auth:       web.NewAuthManager(dashPass),
+			BackupDir:  cfg.BackupDir,
+			IsWritable: os.Getenv("DASHBOARD_CONFIG_WRITABLE") == "true",
+		}
+		webServer = web.NewServer(sc, os.Getenv("DASHBOARD_PORT"))
+		go func() {
+			if err := webServer.Start(); err != nil {
+				log.Printf("[web] error: %v", err)
+			}
+		}()
+	} else {
+		log.Printf("[web] DASHBOARD_PASSWORD not set; web dashboard disabled")
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -66,6 +96,12 @@ func runDaemon() {
 
 	sig := <-sigChan
 	log.Printf("[supabackup] received signal %s, initiating graceful shutdown...", sig)
+
+	if webServer != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = webServer.Stop(shutdownCtx)
+	}
 
 	_ = sched.Stop()
 	log.Printf("[supabackup] shutdown complete")

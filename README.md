@@ -16,6 +16,7 @@ It features first-class support for **Supabase (PostgreSQL)**, generic PostgreSQ
 - **TrueNAS SCALE Permissions**: Runs as a non-root user matching TrueNAS `apps` user permissions (`PUID=568`, `PGID=568`).
 - **Secret Protection**: Accepts database credentials via environment variables or `*_FILE` secret mounts; passwords are redacted and never logged.
 - **Health Checks & Alerts**: Docker `HEALTHCHECK` backed by a local `/var/run/supabackup/status.json` file and optional Slack/Discord webhook notifications.
+- **Embedded Web Dashboard (v0.2.0)**: Built-in responsive web dashboard on port `8080` (opt-in via `DASHBOARD_PASSWORD`), with job statuses, next run countdowns, on-demand runs, backup downloads, recent logs ring buffer, and live config hot reload.
 
 ---
 
@@ -67,6 +68,11 @@ services:
       - MYSQL_DB_URL=${MYSQL_DB_URL:-}
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      # Web Dashboard (set DASHBOARD_PASSWORD to enable UI on port 8080)
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+      - DASHBOARD_CONFIG_WRITABLE=false
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
     volumes:
       - /mnt/tank/supabase-backups:/backups
       - /mnt/tank/supabase-backups/config/config.yaml:/etc/supabackup/config.yaml:ro
@@ -202,3 +208,53 @@ supabackup check
 # Execute an immediate backup run for a job without waiting for cron
 supabackup run-now --job=supabase-prod
 ```
+
+---
+
+## Web Dashboard (v0.2.0)
+
+SupaBackup v0.2.0 bundles an embedded, lightweight web interface served directly from the Go binary (no Node.js/npm dependencies).
+
+### Enabling the Dashboard
+
+The dashboard is **strictly opt-in**. The HTTP server will not start unless an authentication password is provided:
+
+| Environment Variable | Secret File Variable | Default | Description |
+|----------------------|----------------------|---------|-------------|
+| `DASHBOARD_PASSWORD` | `DASHBOARD_PASSWORD_FILE` | *(disabled)* | Password required to access the dashboard |
+| `DASHBOARD_PORT` | — | `8080` | Port for the HTTP server |
+| `DASHBOARD_CONFIG_WRITABLE` | — | `false` | Set to `true` to allow live config editing and scheduler hot-reload |
+
+### Key Dashboard Features
+
+- **Jobs Overview**: Real-time card view displaying database engine, cron expression, last run status (success/failure, duration, size), redacted error messages, and next scheduled run time.
+- **Run on Demand**: Trigger an immediate backup ("Run Now") for any job directly from the web interface. Rejects concurrent executions with HTTP 409 Conflict if the job is actively running.
+- **Backup Downloads**: Browse timestamped backup `.dump` files with exact file sizes and verification badges. Single-click direct browser download.
+- **Recent Logs**: In-memory ring buffer capturing the last 100 log lines per job, with instant visibility into backup progress and connection diagnostics.
+- **Configuration View & Hot Reload**: View the running YAML configuration with all secrets safely redacted. When `DASHBOARD_CONFIG_WRITABLE=true`, administrators can modify configuration in-place, validate YAML syntax, and trigger zero-downtime scheduler hot reloads.
+
+### Security Architecture
+
+- **Constant-Time Authentication**: Login validation uses `subtle.ConstantTimeCompare` against `DASHBOARD_PASSWORD`.
+- **Brute-Force Rate Limiting**: Enforces IP-level token-bucket rate limiting on `/login` to mitigate brute-force attacks.
+- **Hardened Sessions**: Successful authentication issues a cryptographic session token stored in an `HttpOnly`, `SameSite=Strict` cookie.
+- **CSRF Protection**: All mutating API actions (`POST`) require a session-bound CSRF token delivered in the `X-CSRF-Token` header.
+- **Path Traversal Protection**: File download endpoints enforce strict basename sanitization and verify relative paths stay confined to the job's backup directory.
+- **Secret Redaction**: Passwords, credentials, and tokens in connection strings or logs are stripped via `RedactURL` before rendering or returning via the API.
+
+### Endpoints
+
+| Method | Endpoint | Auth Required | Description |
+|--------|----------|---------------|-------------|
+| `GET` | `/healthz` | No | Public health check and uptime probe |
+| `GET` | `/login`, `POST /login` | No | Authentication form & login submission |
+| `POST` | `/logout` | No | Invalidates session and clears cookie |
+| `GET` | `/` | Yes | Main responsive web UI |
+| `GET` | `/api/jobs` | Yes | Job statuses and next scheduled run timestamps |
+| `POST` | `/api/jobs/{name}/run` | Yes (CSRF) | Triggers on-demand backup execution |
+| `GET` | `/api/jobs/{name}/backups` | Yes | Lists backup files and metadata |
+| `GET` | `/api/jobs/{name}/backups/{filename}/download` | Yes | Secure backup file download |
+| `GET` | `/api/jobs/{name}/logs` | Yes | Retrieves recent in-memory log buffer lines |
+| `GET` | `/api/config` | Yes | Current configuration (secrets redacted) |
+| `POST` | `/api/config` | Yes (CSRF) | Validates, updates, and hot-reloads config |
+

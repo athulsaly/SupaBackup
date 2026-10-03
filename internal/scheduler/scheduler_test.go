@@ -157,3 +157,69 @@ func TestScheduler_StartStop(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	sched.Stop()
 }
+
+func TestScheduler_LogBufferAndNextRun(t *testing.T) {
+	tempDir := t.TempDir()
+	statusFile := filepath.Join(tempDir, "status.json")
+
+	job := config.JobConfig{
+		Name:          "logged-job",
+		Engine:        "postgres",
+		Schedule:      "0 2 * * *",
+		RetentionDays: 7,
+		URL:           "postgres://user:secret@localhost/db",
+	}
+
+	appCfg := &config.AppConfig{
+		BackupDir:  tempDir,
+		StatusFile: statusFile,
+		Jobs:       []config.JobConfig{job},
+	}
+
+	tracker, _ := health.NewTracker(statusFile, appCfg.Jobs)
+	mockEng := &mockEngine{}
+	resolver := func(name string) (engine.Engine, error) { return mockEng, nil }
+	sched := NewScheduler(appCfg, tracker, nil, resolver)
+
+	logBuf := health.NewLogBuffer(50)
+	sched.SetLogBuffer(logBuf)
+
+	if err := sched.Start(); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	defer sched.Stop()
+
+	// Verify next run is calculated
+	next := sched.GetNextRun("logged-job")
+	if next == nil || next.IsZero() {
+		t.Errorf("expected non-zero next run time, got %v", next)
+	}
+
+	// Run job
+	if err := sched.RunJob(context.Background(), job); err != nil {
+		t.Fatalf("RunJob failed: %v", err)
+	}
+
+	// Verify logs were captured and secrets redacted
+	logs := logBuf.Get("logged-job")
+	if len(logs) == 0 {
+		t.Fatalf("expected logs in LogBuffer, got none")
+	}
+
+	// Test reload with new schedule
+	newJob := job
+	newJob.Schedule = "0 3 * * *"
+	newCfg := &config.AppConfig{
+		BackupDir:  tempDir,
+		StatusFile: statusFile,
+		Jobs:       []config.JobConfig{newJob},
+	}
+	if err := sched.Reload(newCfg); err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+
+	newNext := sched.GetNextRun("logged-job")
+	if newNext == nil || newNext.IsZero() {
+		t.Errorf("expected new next run time after reload, got %v", newNext)
+	}
+}

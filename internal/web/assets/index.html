@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{.CSRFToken}}">
+  <title>SupaBackup - Dashboard</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <h1>SupaBackup</h1>
+        <span class="badge badge-success" style="font-size: 0.75rem;">Daemon Active</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <form method="POST" action="/logout" style="margin: 0;">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <button type="submit" class="btn btn-sm btn-secondary">Sign Out</button>
+        </form>
+      </div>
+    </header>
+
+    <div class="nav-tabs">
+      <button class="tab-btn active" data-tab="tab-jobs" onclick="showTab('tab-jobs')">Jobs Overview</button>
+      <button class="tab-btn" data-tab="tab-details" onclick="showTab('tab-details')">Backups & Logs</button>
+      <button class="tab-btn" data-tab="tab-config" onclick="showTab('tab-config')">Configuration</button>
+    </div>
+
+    <!-- Tab 1: Jobs Overview -->
+    <div id="tab-jobs" class="tab-content">
+      <div class="card">
+        <div class="card-title">
+          <span>Configured Backup Jobs</span>
+          <button class="btn btn-sm btn-secondary" onclick="loadJobs()">Refresh</button>
+        </div>
+        <div style="overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Job Name</th>
+                <th>Engine</th>
+                <th>Schedule</th>
+                <th>Status</th>
+                <th>Last Run</th>
+                <th>Next Run</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="jobs-tbody">
+              <tr><td colspan="7" style="text-align:center;">Loading jobs...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 2: Job Details, Backups & Logs -->
+    <div id="tab-details" class="tab-content" style="display: none;">
+      <div class="card">
+        <div class="card-title">
+          <span id="details-job-title">Job Backups</span>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <label for="details-job-select" style="font-size: 0.85rem; color: var(--text-muted);">Select Job:</label>
+            <select id="details-job-select" class="form-input" style="width: auto; padding: 4px 8px; font-size: 0.85rem;" onchange="selectJobDetails(this.value)">
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 24px;">
+          <h3 style="font-size: 0.95rem; color: var(--text-muted); margin-bottom: 8px;">Backup Files</h3>
+          <div style="overflow-x: auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Filename</th>
+                  <th>Size</th>
+                  <th>Timestamp</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="backups-tbody">
+                <tr><td colspan="4" style="text-align:center;">Select a job to view files.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h3 style="font-size: 0.95rem; color: var(--text-muted);">Recent Run Logs (Redacted)</h3>
+            <button class="btn btn-sm btn-secondary" onclick="if(currentJobForDetails) loadJobLogs(currentJobForDetails)">Refresh Logs</button>
+          </div>
+          <div id="log-viewer" class="log-viewer">Select a job to view logs.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 3: Configuration -->
+    <div id="tab-config" class="tab-content" style="display: none;">
+      <div class="card">
+        <div class="card-title">
+          <span>Active Configuration</span>
+          <span id="config-path" style="font-size: 0.8rem; font-family: monospace; color: var(--text-muted);"></span>
+        </div>
+        <div id="config-alert" class="alert" style="display: none;"></div>
+        <div class="form-group">
+          <textarea id="config-editor" class="code-editor" spellcheck="false"></textarea>
+        </div>
+        <div style="display: flex; justify-content: flex-end;">
+          <button id="config-save-btn" class="btn" style="display: none;" onclick="saveConfig()">Save & Reload Scheduler</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

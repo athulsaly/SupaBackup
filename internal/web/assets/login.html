@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SupaBackup - Login</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="login-card">
+    <div style="text-align: center; margin-bottom: 24px;">
+      <h1 style="color: #60a5fa; font-size: 1.6rem; font-weight: 700;">SupaBackup</h1>
+      <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">Dashboard Authentication</p>
+    </div>
+
+    {{if .Error}}
+    <div class="alert alert-danger">{{.Error}}</div>
+    {{end}}
+
+    <form method="POST" action="/login">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" class="form-input" required autofocus placeholder="Enter dashboard password">
+      </div>
+      <button type="submit" class="btn" style="width: 100%; justify-content: center; padding: 10px;">Sign In</button>
+    </form>
+  </div>
+</body>
+</html>

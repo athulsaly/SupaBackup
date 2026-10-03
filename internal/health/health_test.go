@@ -76,3 +76,43 @@ func TestCheckHealth_MissingFile(t *testing.T) {
 		t.Errorf("expected error on missing status file, got nil")
 	}
 }
+
+func TestTracker_SyncJobs(t *testing.T) {
+	tempDir := t.TempDir()
+	statusFile := filepath.Join(tempDir, "status.json")
+
+	jobs := []config.JobConfig{
+		{Name: "job1", Engine: "postgres"},
+		{Name: "job2", Engine: "mysql"},
+	}
+
+	tracker, err := NewTracker(statusFile, jobs)
+	if err != nil {
+		t.Fatalf("failed to create tracker: %v", err)
+	}
+
+	// Update jobs: remove job2, add job3, keep job1
+	newJobs := []config.JobConfig{
+		{Name: "job1", Engine: "postgres"},
+		{Name: "job3", Engine: "postgres"},
+	}
+
+	if err := tracker.SyncJobs(newJobs); err != nil {
+		t.Fatalf("SyncJobs failed: %v", err)
+	}
+
+	st := tracker.GetStatus()
+	if len(st.Jobs) != 2 {
+		t.Fatalf("expected 2 jobs, got %d", len(st.Jobs))
+	}
+	if _, ok := st.Jobs["job1"]; !ok {
+		t.Errorf("expected job1 to exist")
+	}
+	if _, ok := st.Jobs["job3"]; !ok {
+		t.Errorf("expected job3 to exist")
+	}
+	if _, ok := st.Jobs["job2"]; ok {
+		t.Errorf("expected job2 to be removed")
+	}
+}
+

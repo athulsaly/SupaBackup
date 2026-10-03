@@ -171,6 +171,35 @@ func (t *Tracker) persist() error {
 	return nil
 }
 
+// SyncJobs synchronizes the tracked jobs map with updated job configs after a reload.
+func (t *Tracker) SyncJobs(jobs []config.JobConfig) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	active := make(map[string]bool, len(jobs))
+	for _, j := range jobs {
+		active[j.Name] = true
+		if existing, exists := t.status.Jobs[j.Name]; exists {
+			existing.Engine = j.Engine
+		} else {
+			t.status.Jobs[j.Name] = &JobStatus{
+				JobName:    j.Name,
+				Engine:     j.Engine,
+				LastStatus: "pending",
+			}
+		}
+	}
+
+	for name := range t.status.Jobs {
+		if !active[name] {
+			delete(t.status.Jobs, name)
+		}
+	}
+
+	t.status.LastUpdate = time.Now()
+	return t.persist()
+}
+
 // CheckHealth reads the status file and checks if any jobs have persistently failed.
 func CheckHealth(statusFilePath string, maxConsecutiveFailures int) error {
 	if maxConsecutiveFailures <= 0 {
@@ -199,3 +228,4 @@ func CheckHealth(statusFilePath string, maxConsecutiveFailures int) error {
 
 	return nil
 }
+

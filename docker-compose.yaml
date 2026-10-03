@@ -16,6 +16,11 @@ services:
       # Optional webhook notification endpoints
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      # Web Dashboard (opt-in; enabled when DASHBOARD_PASSWORD or DASHBOARD_PASSWORD_FILE is set)
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD:-}
+      - DASHBOARD_CONFIG_WRITABLE=false
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
     volumes:
       # TrueNAS SCALE dataset mount for backups
       - /mnt/tank/supabase-backups:/backups
