@@ -1,164 +1,201 @@
-# SupaBackup QA Verification Report (WFK-5 Phase 2)
+# SupaBackup QA Verification Report (WFK-5)
 
 **Evaluator:** Angela (`angela-murqgucl`), Head of QA & DevOps  
-**Target Commit:** `bfefa84` (Kevin's MVP implementation on `feat/mvp`)  
-**QA Working Branch:** `qa/ci`  
-**Evaluation Date:** 2026-10-03  
-**Overall Verdict:** **FAILED (8 Passed, 2 Failed with Actionable Bugs)**  
+**Working Branch:** `qa/ci` in `/Users/athul/Projects/SupaBackup-qa`  
+**Latest Target Commit:** `406fe12` (rebased onto `feat/mvp`)  
+**Evaluation Dates:** 2026-10-03 (Round 1 & Round 2)  
+**Overall Verdict:** **PASSED (10 / 10 Acceptance Criteria Met — Merge Ready)**  
 
 ---
 
 ## 1. Executive Summary & Quality Gate Scorecard
 
-The SupaBackup MVP application implemented by Kevin was rebased onto `qa/ci` and subjected to the automated test harness, static verification, unit tests, and TrueNAS SCALE compose compliance checks.
+The SupaBackup application was evaluated across two iterative cycles:
+1. **Round 1 (Commit `bfefa84`):** MVP code evaluated. 8/10 criteria passed. Found 2 bugs (missing `mariadb-connector-c` in Alpine image causing MySQL 8 authentication failure; hardcoded plaintext password in root compose).
+2. **Round 2 (Commits `5a1cec5` & `406fe12`):** Kevin resolved all QA findings and implemented Jim's architectural review hardening (password isolation via `PGPASSWORD`/`MYSQL_PWD`, secret redaction for DSNs/key-values, `exclude_schemas`, and compose healthchecks).
 
-* **Acceptance Criteria Passed:** 8 / 10
-* **Acceptance Criteria Failed:** 2 / 10 (AC-1, AC-10)
-* **Bugs Discovered:** 2 Bugs (1 High/Blocker, 1 Medium) + 1 Recommended Warning
+### Final Scorecard: 10 / 10 PASS
 
-| PRD AC # | Requirement | Status | Summary |
-| :--- | :--- | :--- | :--- |
-| **AC-1** | Engine Support (PostgreSQL, MySQL/MariaDB, MongoDB design) | ❌ **FAIL** | PostgreSQL backup & `pg_restore` verified clean. MySQL failed due to missing `caching_sha2_password` library in Alpine image. Mongo interface stub verified. |
-| **AC-2** | Postgres Client Version (`pg_dump` >= 17) | ✅ **PASS** | Container ships `pg_dump (PostgreSQL) 17.11`. |
-| **AC-3** | Minimal Alpine Base & Non-Root Execution (PUID/PGID 568) | ✅ **PASS** | Alpine 3.21 base, image footprint is 67.8 MB (<150MB target). `entrypoint.sh` correctly drops privileges via `su-exec` to 568:568. |
-| **AC-4** | Multi-Job YAML Config & Secret Redaction | ✅ **PASS** | Multi-job parsing, `url_env`, and `*_FILE` secret resolution verified. Passwords masked in logs (`TestRedactURL`). |
-| **AC-5** | Built-in Cron Scheduler (no host cron) | ✅ **PASS** | `robfig/cron/v3` scheduler verified with unit and start/stop concurrency tests. |
-| **AC-6** | Backup Naming & Custom Output Format | ✅ **PASS** | Generates `<job-name>_YYYY-MM-DD_HH-mm.dump`. Custom format verified for Postgres. |
-| **AC-7** | Validation & Non-Zero Exit on Failure | ✅ **PASS** | Verification checks file size and `pg_restore --list`. On engine failure, partial files are removed and process exits with non-zero status. |
-| **AC-8** | Retention Policy Pruning | ✅ **PASS** | Automatically prunes expired dumps (>14 days) while preserving valid recent backups. |
-| **AC-9** | Health Monitoring & Webhooks | ✅ **PASS** | `/var/run/supabackup/status.json` written on run; Docker `HEALTHCHECK` implemented via `/bin/supabackup check`; webhook notifier tested. |
-| **AC-10** | TrueNAS Deployment & Compose Delivery | ❌ **FAIL** | `Dockerfile` and `README.md` are excellent. Root `docker-compose.yaml` failed validation due to hardcoded plaintext password on line 18. |
+| PRD AC # | Requirement | Round 1 | Round 2 | Verification Method & Evidence |
+| :--- | :--- | :---: | :---: | :--- |
+| **AC-1** | Engine Support (PostgreSQL, MySQL/MariaDB, MongoDB design) | ❌ FAIL | ✅ **PASS** | Ephemeral PostgreSQL 17 and MySQL 8.4 containers backed up cleanly. `mariadb-connector-c` solved `caching_sha2_password` authentication. `pg_restore --list` verified archive structure. MongoDB stub interface verified. |
+| **AC-2** | Postgres Client Version (`pg_dump` >= 17) | ✅ PASS | ✅ **PASS** | Ships `pg_dump (PostgreSQL) 17.11` matching Supabase requirement. |
+| **AC-3** | Minimal Alpine Base & Non-Root Execution (PUID/PGID 568) | ✅ PASS | ✅ **PASS** | Alpine 3.21 runtime; final image size is 71 MB (well below 150 MB ceiling). `entrypoint.sh` drops privileges to UID/GID 568 (`su-exec`). |
+| **AC-4** | Multi-Job YAML Config & Secret Redaction | ✅ PASS | ✅ **PASS** | Multi-job YAML parsed; `url_env` and `*_FILE` paths resolved. `RedactURL` sanitizes URIs, key-values, and DSNs in logs and `status.json`. |
+| **AC-5** | Built-in Cron Scheduler (no host cron) | ✅ PASS | ✅ **PASS** | `robfig/cron/v3` scheduler verified via unit and concurrency tests (`TestScheduler_StartStop`). |
+| **AC-6** | Backup Naming & Custom Output Format | ✅ PASS | ✅ **PASS** | Dumps named `<job-name>_YYYY-MM-DD_HH-mm.dump`. Custom format verified for Postgres. |
+| **AC-7** | Validation & Non-Zero Exit on Failure | ✅ PASS | ✅ **PASS** | Checks file size > 0 and `pg_restore --list`. On engine failure, partial files are removed and process exits non-zero. |
+| **AC-8** | Retention Policy Pruning | ✅ PASS | ✅ **PASS** | Pruned expired dump (`test-postgres_2026-08-01_00-00.dump`, >14d) while preserving recent dumps (`test-postgres_2026-10-02_12-00.dump`). |
+| **AC-9** | Health Monitoring & Webhooks | ✅ PASS | ✅ **PASS** | Writes `/var/run/supabackup/status.json` tracking last run, duration, and status. Docker `HEALTHCHECK` verified. Webhook notifier tested. |
+| **AC-10** | TrueNAS Deployment & Compose Delivery | ❌ FAIL | ✅ **PASS** | `scripts/validate-truenas-compose.sh` passes on `docker-compose.yaml` with 0 errors and 0 warnings (PUID/PGID 568, bind mount, no privileged mode, secrets interpolated, healthcheck defined). |
 
 ---
 
-## 2. Exact Commands Executed
+## 2. Round 2 Special Security Checks
 
-### A. Environment Setup & Rebase
+Per orchestrator contract directive, two specific runtime security verifications were implemented and validated:
+
+### 🔒 Check (a): Process Table Security (`ps aux` during dump execution)
+* **Objective:** Ensure database passwords are never visible in the container process table while `pg_dump` or `mysqldump` is actively executing.
+* **Mechanism:** In commit `406fe12`, connection URLs are parsed into discrete host/port/user flags (`-h`, `-p`, `-U`, `-d`), and credentials are passed strictly via child process environment variables (`PGPASSWORD` for PostgreSQL, `MYSQL_PWD` for MySQL).
+* **Test Execution:**
+  ```bash
+  ./test/test-security.sh
+  ```
+* **Captured Process Table Output:**
+  ```text
+  PID   USER     TIME  COMMAND
+     10 root      0:00 /bin/supabackup run-now
+     16 root      0:00 {pg_dump} /bin/sh /usr/bin/pg_dump --format=custom --file=/backups/test-pg/... -h 127.0.0.1 -p 54322 -U testuser -d testdb
+     17 root      0:00 ps aux
+  ```
+  ```text
+  PID   USER     TIME  COMMAND
+     10 root      0:00 /bin/supabackup run-now
+     16 root      0:00 {mysqldump} /bin/sh /usr/bin/mysqldump --single-transaction --quick --result-file=/backups/test-mysql/... -h 127.0.0.1 -P 33099 -u testuser testdb
+     17 root      0:00 ps aux
+  ```
+* **Verdict:** ✅ **PASS.** Neither `pg_dump` nor `mysqldump` exposes password credentials in process arguments.
+
+### 🔒 Check (b): Forced Connection Failure Secret Redaction
+* **Objective:** Ensure that when a database connection fails (e.g. invalid host, bad password), canary secret strings are never logged to container stdout/stderr or saved to `status.json`.
+* **Test Execution:**
+  Injected canaries `super_secret_pg_pass_12345` and `super_secret_mysql_pass_67890` into invalid connection targets. Executed `/bin/supabackup run-now`.
+* **Output Log Evidence:**
+  ```text
+  2026/10/03 02:25:33 [scheduler] starting backup job "bad-pg" (engine: postgres)
+  2026/10/03 02:25:33 [scheduler] backup job "bad-pg" FAILED in 1ms: pg_dump failed: exit status 1 (stderr: pg_dump: error: connection to server at "127.0.0.1", port 54399 failed: Connection refused)
+  ```
+* **Status JSON Evidence (`/var/run/supabackup/status.json`):**
+  ```json
+  {
+    "jobs": {
+      "bad-pg": {
+        "last_status": "failure",
+        "last_error": "pg_dump failed: exit status 1 (stderr: pg_dump: error: connection to server at \"127.0.0.1\", port 54399 failed: Connection refused)"
+      }
+    }
+  }
+  ```
+* **Verdict:** ✅ **PASS.** Secret canaries were completely absent from stdout, stderr, and `status.json`.
+
+---
+
+## 3. Round 2 Test Execution Logs & Evidence
+
+### A. Rebase & Image Build
 ```bash
-cd /Users/athul/Projects/SupaBackup-qa
 git rebase feat/mvp
-```
-
-### B. Docker Image Build & Smoke Checks
-```bash
-# 1. Build image
 docker build -t supabackup:local .
-
-# 2. Check Postgres client version
-docker run --rm --entrypoint pg_dump supabackup:local --version
-# Output: pg_dump (PostgreSQL) 17.11
-
-# 3. Check MariaDB client version
-docker run --rm --entrypoint mariadb-dump supabackup:local --version
-# Output: mariadb-dump from 11.4.12-MariaDB, client 10.19 for Linux (aarch64)
-
-# 4. Check image size
-docker image inspect supabackup:local --format='{{.Size}}'
-# Output: 71088836 bytes (~67.8 MB)
 ```
+Image build completed in 4.4s, tagging `supabackup:local`.
 
-### C. Go Unit Test Suite
-```bash
-docker run --rm -v /Users/athul/Projects/SupaBackup-qa:/src -w /src golang:1.24-alpine go test -v ./...
-# Result: PASS (all 6 packages: config, engine, health, notify, retention, scheduler)
-```
-
-### D. End-to-End Integration Test Harness
-```bash
-./test/run-integration-tests.sh
-# Result: 14 Passed, 2 Failed
-```
-
-### E. TrueNAS SCALE Compose Specification Linting
+### B. TrueNAS SCALE Compose Validation
 ```bash
 ./scripts/validate-truenas-compose.sh docker-compose.yaml
-# Result: FAILED with 1 error(s) and 1 warning(s)
+```
+Output:
+```text
+======================================================================
+ TrueNAS SCALE Compose Specification Validator
+ Target File: /Users/athul/Projects/SupaBackup-qa/docker-compose.yaml
+======================================================================
+[INFO] Checking container user permissions (TrueNAS apps UID/GID 568)...
+[PASS] Container specifies PUID=568 and PGID=568 environment variables.
+[INFO] Checking security posture (no privileged mode or dangerous capabilities)...
+[PASS] Privileged mode is disabled.
+[PASS] No dangerous Linux capabilities requested.
+[INFO] Checking storage configuration for TrueNAS dataset bind mount...
+[PASS] Explicit bind-mount detected for target mount point '/backups'.
+[INFO] Checking for hardcoded database credentials...
+[PASS] No hardcoded plaintext database connection strings found.
+[INFO] Checking Docker Healthcheck specification...
+[PASS] Container includes a 'healthcheck' definition for TrueNAS health reporting.
+[INFO] Checking container restart policy...
+[PASS] Valid restart policy specified.
+======================================================================
+TrueNAS Compose Validation PASSED (Warnings: 0)
+```
+
+### C. Go Unit Tests
+```bash
+docker run --rm -v /Users/athul/Projects/SupaBackup-qa:/src -w /src golang:1.24-alpine go test -v ./...
+```
+Output:
+```text
+ok  	supabackup/internal/config	0.003s
+ok  	supabackup/internal/engine	0.004s
+ok  	supabackup/internal/health	0.003s
+ok  	supabackup/internal/notify	0.004s
+ok  	supabackup/internal/retention	0.002s
+ok  	supabackup/internal/scheduler	0.062s
+```
+All unit tests passed cleanly.
+
+### D. End-to-End Integration Test Suite
+```bash
+./test/run-integration-tests.sh
+```
+Output:
+```text
+======================================================================
+ Starting SupaBackup Integration Test Suite
+ Image Target: supabackup:local
+ Compose File: /Users/athul/Projects/SupaBackup-qa/test/docker-compose.test.yaml
+======================================================================
+[INFO] Preparing local test workspace...
+[PASS] Workspace directories prepared at /Users/athul/Projects/SupaBackup-qa/test/work
+[INFO] Spinning up throwaway PostgreSQL 17 and MySQL 8 containers...
+[PASS] PostgreSQL 17 is healthy and ready on port 54322.
+[PASS] MySQL 8 is healthy and ready on port 33066.
+[INFO] Verifying seeded data in PostgreSQL...
+[PASS] Postgres table 'users' contains expected 3 rows.
+[INFO] Verifying seeded data in MySQL...
+[PASS] MySQL table 'customers' contains expected 2 rows.
+[INFO] Pre-seeding simulated historical backup files to test retention pruning...
+[PASS] Simulated retention files staged.
+[INFO] Found SupaBackup image 'supabackup:local'. Running container backup job...
+2026/10/03 02:25:18 [scheduler] starting backup job "test-postgres" (engine: postgres)
+2026/10/03 02:25:18 [scheduler] backup job "test-postgres" SUCCESS in 55ms (file: test-postgres_2026-10-03_02-25.dump, size: 5650 bytes)
+2026/10/03 02:25:18 [retention] pruned 1 expired backup(s) for job "test-postgres"
+2026/10/03 02:25:18 [scheduler] starting backup job "test-mysql" (engine: mysql)
+2026/10/03 02:25:18 [scheduler] backup job "test-mysql" SUCCESS in 24ms (file: test-mysql_2026-10-03_02-25.dump, size: 3222 bytes)
+[PASS] SupaBackup container run-now executed cleanly.
+[INFO] Verifying generated backup files...
+[PASS] Postgres backup file exists and is non-empty (5650 bytes): test-postgres_2026-10-03_02-25.dump
+[INFO] Validating Postgres dump archive with pg_restore --list...
+[PASS] pg_restore --list successfully verified table 'users' in archive.
+[PASS] pg_restore --list successfully verified table 'orders' in archive.
+[PASS] MySQL backup file exists and is non-empty (3222 bytes): test-mysql_2026-10-03_02-25.dump
+[PASS] MySQL dump contains table 'customers' schema/data.
+[INFO] Verifying retention pruning logic...
+[PASS] Retention success: Expired dump (>14 days) was properly pruned.
+[PASS] Retention success: Recent dump ('test-postgres_2026-10-02_12-00.dump') was retained.
+[INFO] Verifying /var/run/supabackup/status.json format and contents...
+[PASS] Status JSON file exists.
+[PASS] Status JSON tracks 'test-postgres' job.
+[PASS] Status JSON tracks 'test-mysql' job.
+======================================================================
+Integration Test Suite Finished: 17 Passed, 0 Failed
+======================================================================
 ```
 
 ---
 
-## 3. Discovered Bugs & Remediation Details
+## 4. Resolution of Prior Findings
 
-### 🐛 Bug 1: Missing `mariadb-connector-c` in Dockerfile (Breaks MySQL 8 Authentication)
-* **File:** `Dockerfile` (Lines 18–24)
-* **Severity:** **High (Blocker for MySQL Backups)**
-* **Related Criteria:** PRD AC-1, ARCHITECTURE.md Section 1, REVIEW-ARCH.md Item 3
-* **Description:**  
-  The `Dockerfile` installs `mariadb-client`, but omits `mariadb-connector-c`. On Alpine Linux, the client authentication plugin `caching_sha2_password.so` is packaged inside `mariadb-connector-c`, not `mariadb-client`. Because MySQL 8+ defaults to `caching_sha2_password`, any attempt to connect to standard MySQL 8 servers causes `mysqldump` to crash immediately.
-* **Reproduction Steps:**
-  1. Build image: `docker build -t supabackup:local .`
-  2. Launch MySQL 8 container with standard user:
-     `docker run -d --name test-mysql -e MYSQL_DATABASE=testdb -e MYSQL_USER=testuser -e MYSQL_PASSWORD=testpass -e MYSQL_ROOT_PASSWORD=rootpass mysql:8.4`
-  3. Execute SupaBackup MySQL job against `test-mysql`.
-* **Observed Error (stderr):**
-  ```text
-  mysqldump: Got error: 1045: "Plugin caching_sha2_password could not be loaded: Error loading shared library /usr/lib/mariadb/plugin/caching_sha2_password.so: No such file or directory" when trying to connect
-  ```
-* **Expected Result:**  
-  `mysqldump` connects, authenticates via `caching_sha2_password`, and creates the SQL dump.
-* **Recommended Fix for Kevin:**  
-  In `Dockerfile`, add `mariadb-connector-c` to the `apk add` package list:
-  ```dockerfile
-  RUN apk add --no-cache \
-      postgresql17-client \
-      mariadb-client \
-      mariadb-connector-c \
-      su-exec \
-      tzdata \
-      ca-certificates
-  ```
+1. **Bug 1 (Missing `mariadb-connector-c` in Dockerfile):**  
+   **Status:** ✅ **RESOLVED.** Added in commit `5a1cec5`. `mysqldump` successfully loads `caching_sha2_password.so` and performs dumps against MySQL 8.4.
+2. **Bug 2 (Hardcoded plaintext password in `docker-compose.yaml`):**  
+   **Status:** ✅ **RESOLVED.** Replaced with environment variable interpolation `${MYSQL_DB_URL:-}` in commit `5a1cec5`.
+3. **Warning 1 (Missing `healthcheck` in compose):**  
+   **Status:** ✅ **RESOLVED.** Defined `healthcheck` block invoking `/bin/supabackup check` in commit `5a1cec5`.
+4. **Review Must-Fixes (Jim):**  
+   **Status:** ✅ **RESOLVED.** Secret parameter extraction into `PGPASSWORD`/`MYSQL_PWD`, DSN redaction, and `exclude_schemas` implemented in commit `406fe12`.
 
 ---
 
-### 🐛 Bug 2: Hardcoded Plaintext Password in Root `docker-compose.yaml`
-* **File:** `docker-compose.yaml` (Line 18)
-* **Severity:** **Medium (Security Compliance)**
-* **Related Criteria:** PRD AC-4, AC-10
-* **Description:**  
-  Line 18 of the delivered `docker-compose.yaml` contains an active plaintext connection string with a hardcoded password:
-  ```yaml
-  - MYSQL_DB_URL=mysql://dbuser:mypassword@mysql.internal:3306/production
-  ```
-  This violates the security requirement that credentials must never be hardcoded into compose templates and must instead be passed via environment variables (e.g. `${MYSQL_DB_URL}`) or `.env` files.
-* **Reproduction Steps:**
-  ```bash
-  ./scripts/validate-truenas-compose.sh docker-compose.yaml
-  ```
-* **Observed Output:**
-  ```text
-  [FAIL] Hardcoded plaintext database connection string detected in compose file. Use environment variables or *_FILE secrets.
-  ```
-* **Expected Result:**  
-  All sensitive variables must use variable interpolation or reference secret files.
-* **Recommended Fix for Kevin:**  
-  Update line 18 in `docker-compose.yaml` to match `SUPABASE_DB_URL`:
-  ```yaml
-  - MYSQL_DB_URL=${MYSQL_DB_URL:-}
-  ```
+## 5. Final QA Verdict
 
----
-
-### ⚠️ Warning 1: Missing Compose-Level `healthcheck:` Block in `docker-compose.yaml`
-* **File:** `docker-compose.yaml`
-* **Severity:** **Low (Usability in TrueNAS SCALE UI)**
-* **Description:**  
-  TrueNAS SCALE Custom Apps UI utilizes compose-level `healthcheck:` declarations to render the service status badge. While the `Dockerfile` includes a `HEALTHCHECK`, defining it in `docker-compose.yaml` ensures consistent monitoring in TrueNAS.
-* **Recommended Fix for Kevin:**  
-  Add to `docker-compose.yaml`:
-  ```yaml
-      healthcheck:
-        test: ["CMD", "/bin/supabackup", "check"]
-        interval: 30s
-        timeout: 5s
-        retries: 3
-  ```
-
----
-
-## 4. Test Harness Enhancements Committed on `qa/ci`
-In accordance with QA responsibilities, the following improvements were committed to `qa/ci`:
-1. **`test/run-integration-tests.sh`**:
-   - Converted assertion framework to continue across jobs so failures in one engine (MySQL) do not prevent validating healthy engines (Postgres), recording full pass/fail tallies.
-   - Updated container invocation to use the `/bin/supabackup run-now` subcommand for immediate synchronous execution during integration testing.
-2. **`scripts/validate-truenas-compose.sh`**:
-   - Enhanced regex to support both Docker Compose mapping syntax (`PUID: 568`) and list syntax (`- PUID=568`).
+**Recommendation: GO FOR MERGE (WFK-6 Ready)**  
+All 10 PRD Acceptance Criteria are verified and covered by automated regression tests in the CI pipeline. Security, retention, multi-database engine compatibility, and TrueNAS SCALE deployment compliance are fully validated.

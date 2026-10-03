@@ -116,6 +116,11 @@ jobs:
           chmod +x test/run-integration-tests.sh
           ./test/run-integration-tests.sh
 
+      - name: Run Security Verification Tests
+        run: |
+          chmod +x test/test-security.sh
+          ./test/test-security.sh
+
   truenas-validation:
     name: TrueNAS Compose Specification Lint
     runs-on: ubuntu-latest
