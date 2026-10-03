@@ -2,6 +2,7 @@ package web
 
 import (
 	"embed"
+	"errors"
 	"html/template"
 	"io/fs"
 	"net"
@@ -50,8 +51,19 @@ func NewRouter(sc *ServerContext) http.Handler {
 			password := r.FormValue("password")
 			session, err := sc.Auth.Authenticate(clientIP, password)
 			if err != nil {
+				statusCode := http.StatusUnauthorized
+				if errors.Is(err, ErrRateLimited) {
+					statusCode = http.StatusTooManyRequests
+					w.Header().Set("Retry-After", "60")
+				}
+
+				if strings.Contains(r.Header.Get("Accept"), "application/json") {
+					writeError(w, statusCode, err.Error())
+					return
+				}
+
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusUnauthorized)
+				w.WriteHeader(statusCode)
 				_ = loginTmpl.Execute(w, map[string]any{
 					"Error": err.Error(),
 				})
@@ -59,7 +71,7 @@ func NewRouter(sc *ServerContext) http.Handler {
 			}
 
 			// Set session cookie
-			cookie := CreateSessionCookie(session.Token, int(SessionDuration.Seconds()))
+			cookie := CreateSessionCookie(r, session.Token, int(SessionDuration.Seconds()))
 			http.SetCookie(w, cookie)
 
 			// If JSON request, return token, else redirect to /
@@ -78,18 +90,48 @@ func NewRouter(sc *ServerContext) http.Handler {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	})
 
-	// Logout route
+	// Logout route (POST-only with CSRF validation)
 	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			if cookie, err := r.Cookie(SessionCookieName); err == nil {
-				sc.Auth.RevokeSession(cookie.Value)
-			}
-			clearCookie := CreateSessionCookie("", -1)
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		cookie, err := r.Cookie(SessionCookieName)
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+
+		session, ok := sc.Auth.ValidateSession(cookie.Value)
+		if !ok {
+			clearCookie := CreateSessionCookie(r, "", -1)
 			http.SetCookie(w, clearCookie)
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+
+		// Validate CSRF token from header or form
+		csrfToken := r.Header.Get("X-CSRF-Token")
+		if csrfToken == "" {
+			csrfToken = r.FormValue("csrf_token")
+		}
+
+		if !sc.Auth.ValidateCSRF(session, csrfToken) {
+			http.Error(w, "Forbidden: invalid CSRF token", http.StatusForbidden)
+			return
+		}
+
+		sc.Auth.RevokeSession(cookie.Value)
+		clearCookie := CreateSessionCookie(r, "", -1)
+		http.SetCookie(w, clearCookie)
+
+		if strings.Contains(r.Header.Get("Accept"), "application/json") {
+			writeJSON(w, http.StatusOK, map[string]string{"message": "logged out"})
+			return
+		}
+
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
 	})
 
 	// UI Home Route

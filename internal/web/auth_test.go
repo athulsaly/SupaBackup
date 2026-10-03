@@ -1,10 +1,14 @@
 package web
 
 import (
+	"crypto/tls"
+	"net/http/httptest"
+	"os"
 	"testing"
 )
 
 func TestAuthManager_Authenticate(t *testing.T) {
+
 	mgr := NewAuthManager("secret123")
 
 	if !mgr.IsEnabled() {
@@ -100,3 +104,44 @@ func TestAuthManager_Disabled(t *testing.T) {
 		t.Errorf("expected empty password manager to be disabled")
 	}
 }
+
+func TestAuthManager_CookieSecure(t *testing.T) {
+	// Case 1: default/auto over plain HTTP -> secure false (TrueNAS LAN)
+	_ = os.Unsetenv("DASHBOARD_COOKIE_SECURE")
+	reqHTTP := httptest.NewRequest("GET", "http://truenas:8080/", nil)
+	c := CreateSessionCookie(reqHTTP, "tok1", 3600)
+	if c.Secure {
+		t.Errorf("expected Secure=false for plain HTTP under auto mode")
+	}
+
+	// Case 2: default/auto over TLS -> secure true
+	reqTLS := httptest.NewRequest("GET", "https://truenas:8080/", nil)
+	reqTLS.TLS = &tls.ConnectionState{}
+	c = CreateSessionCookie(reqTLS, "tok2", 3600)
+	if !c.Secure {
+		t.Errorf("expected Secure=true for TLS under auto mode")
+	}
+
+	// Case 3: default/auto behind HTTPS reverse proxy (X-Forwarded-Proto) -> secure true
+	reqProxy := httptest.NewRequest("GET", "http://truenas:8080/", nil)
+	reqProxy.Header.Set("X-Forwarded-Proto", "https")
+	c = CreateSessionCookie(reqProxy, "tok3", 3600)
+	if !c.Secure {
+		t.Errorf("expected Secure=true with X-Forwarded-Proto: https under auto mode")
+	}
+
+	// Case 4: explicit DASHBOARD_COOKIE_SECURE=true -> always true even over HTTP
+	t.Setenv("DASHBOARD_COOKIE_SECURE", "true")
+	c = CreateSessionCookie(reqHTTP, "tok4", 3600)
+	if !c.Secure {
+		t.Errorf("expected Secure=true when DASHBOARD_COOKIE_SECURE=true")
+	}
+
+	// Case 5: explicit DASHBOARD_COOKIE_SECURE=false -> always false even over TLS
+	t.Setenv("DASHBOARD_COOKIE_SECURE", "false")
+	c = CreateSessionCookie(reqTLS, "tok5", 3600)
+	if c.Secure {
+		t.Errorf("expected Secure=false when DASHBOARD_COOKIE_SECURE=false")
+	}
+}
+

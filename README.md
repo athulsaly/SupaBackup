@@ -224,6 +224,7 @@ The dashboard is **strictly opt-in**. The HTTP server will not start unless an a
 | `DASHBOARD_PASSWORD` | `DASHBOARD_PASSWORD_FILE` | *(disabled)* | Password required to access the dashboard |
 | `DASHBOARD_PORT` | — | `8080` | Port for the HTTP server |
 | `DASHBOARD_CONFIG_WRITABLE` | — | `false` | Set to `true` to allow live config editing and scheduler hot-reload |
+| `DASHBOARD_COOKIE_SECURE` | — | `auto` | Cookie `Secure` flag: `auto` (active on TLS or `X-Forwarded-Proto: https`), `true`, or `false` |
 
 ### Key Dashboard Features
 
@@ -237,9 +238,10 @@ The dashboard is **strictly opt-in**. The HTTP server will not start unless an a
 
 - **Constant-Time Authentication**: Login validation uses `subtle.ConstantTimeCompare` against `DASHBOARD_PASSWORD`.
 - **Brute-Force Rate Limiting**: Enforces IP-level token-bucket rate limiting on `/login` to mitigate brute-force attacks.
-- **Hardened Sessions**: Successful authentication issues a cryptographic session token stored in an `HttpOnly`, `SameSite=Strict` cookie.
-- **CSRF Protection**: All mutating API actions (`POST`) require a session-bound CSRF token delivered in the `X-CSRF-Token` header.
-- **Path Traversal Protection**: File download endpoints enforce strict basename sanitization and verify relative paths stay confined to the job's backup directory.
+- **Hardened Sessions**: Successful authentication issues a cryptographic session token stored in an `HttpOnly`, `SameSite=Strict` cookie. The `Secure` flag automatically activates over TLS or HTTPS reverse proxies (`X-Forwarded-Proto: https`), while allowing unencrypted LAN access (e.g. `http://truenas:8080`) when `DASHBOARD_COOKIE_SECURE=auto`.
+- **CSRF Protection**: All mutating API actions (`POST`, including `POST /logout` and `POST /api/config`) require a session-bound CSRF token delivered in the `X-CSRF-Token` header or form field.
+- **Path Traversal & Symlink Protection**: File download endpoints enforce strict basename sanitization and evaluate canonical paths via `filepath.EvalSymlinks`, blocking both relative path traversal (`../`) and malicious symlinks attempting to escape the job's backup directory.
+- **Concurrent-Safe Hot Reload**: Configuration hot reloads allow active jobs to finish on their configuration snapshot while updating the scheduler and tracker under mutex protection.
 - **Secret Redaction**: Passwords, credentials, and tokens in connection strings or logs are stripped via `RedactURL` before rendering or returning via the API.
 
 ### Endpoints
@@ -248,7 +250,7 @@ The dashboard is **strictly opt-in**. The HTTP server will not start unless an a
 |--------|----------|---------------|-------------|
 | `GET` | `/healthz` | No | Public health check and uptime probe |
 | `GET` | `/login`, `POST /login` | No | Authentication form & login submission |
-| `POST` | `/logout` | No | Invalidates session and clears cookie |
+| `POST` | `/logout` | Yes (CSRF) | Invalidates session and clears cookie |
 | `GET` | `/` | Yes | Main responsive web UI |
 | `GET` | `/api/jobs` | Yes | Job statuses and next scheduled run timestamps |
 | `POST` | `/api/jobs/{name}/run` | Yes (CSRF) | Triggers on-demand backup execution |

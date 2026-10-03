@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -223,3 +224,79 @@ func TestScheduler_LogBufferAndNextRun(t *testing.T) {
 		t.Errorf("expected new next run time after reload, got %v", newNext)
 	}
 }
+
+func TestScheduler_ReloadConcurrentWithRunJob(t *testing.T) {
+	tempDir := t.TempDir()
+	statusFile := filepath.Join(tempDir, "status.json")
+
+	job1 := config.JobConfig{
+		Name:          "race-job-1",
+		Engine:        "postgres",
+		Schedule:      "0 2 * * *",
+		RetentionDays: 7,
+		URL:           "postgres://user:secret@localhost/db",
+	}
+	job2 := config.JobConfig{
+		Name:          "race-job-2",
+		Engine:        "postgres",
+		Schedule:      "0 3 * * *",
+		RetentionDays: 14,
+		URL:           "postgres://user:secret@localhost/db2",
+	}
+
+	appCfg := &config.AppConfig{
+		BackupDir:  tempDir,
+		StatusFile: statusFile,
+		Jobs:       []config.JobConfig{job1},
+	}
+
+	tracker, _ := health.NewTracker(statusFile, appCfg.Jobs)
+	mockEng := &mockEngine{}
+	resolver := func(name string) (engine.Engine, error) { return mockEng, nil }
+	sched := NewScheduler(appCfg, tracker, nil, resolver)
+
+	if err := sched.Start(); err != nil {
+		t.Fatalf("start failed: %v", err)
+	}
+	defer sched.Stop()
+
+	var wg sync.WaitGroup
+	ctx := context.Background()
+
+	// Concurrently run jobs
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			j := job1
+			if idx%2 == 1 {
+				j = job2
+			}
+			_ = sched.RunJob(ctx, j)
+			_ = sched.IsJobRunning(j.Name)
+			_ = sched.GetNextRun(j.Name)
+			_ = sched.GetConfig()
+		}(i)
+	}
+
+	// Concurrently reload configuration
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			jobs := []config.JobConfig{job1}
+			if idx%2 == 1 {
+				jobs = append(jobs, job2)
+			}
+			newCfg := &config.AppConfig{
+				BackupDir:  tempDir,
+				StatusFile: statusFile,
+				Jobs:       jobs,
+			}
+			_ = sched.Reload(newCfg)
+		}(i)
+	}
+
+	wg.Wait()
+}
+

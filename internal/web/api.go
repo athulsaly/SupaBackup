@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"supabackup/internal/config"
@@ -20,6 +21,7 @@ import (
 // ServerContext contains dependencies shared across web handlers.
 type ServerContext struct {
 	StartTime  time.Time
+	mu         sync.RWMutex
 	Config     *config.AppConfig
 	Tracker    *health.Tracker
 	Scheduler  *scheduler.Scheduler
@@ -27,6 +29,20 @@ type ServerContext struct {
 	Auth       *AuthManager
 	BackupDir  string
 	IsWritable bool
+}
+
+// GetConfig safely returns the active configuration snapshot.
+func (sc *ServerContext) GetConfig() *config.AppConfig {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.Config
+}
+
+// SetConfig safely updates the active configuration pointer.
+func (sc *ServerContext) SetConfig(cfg *config.AppConfig) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.Config = cfg
 }
 
 type JobView struct {
@@ -199,13 +215,38 @@ func (sc *ServerContext) HandleDownloadBackup(w http.ResponseWriter, r *http.Req
 	jobDir := filepath.Clean(filepath.Join(sc.BackupDir, jobName))
 	targetPath := filepath.Clean(filepath.Join(jobDir, baseFilename))
 
-	rel, err := filepath.Rel(jobDir, targetPath)
-	if err != nil || strings.HasPrefix(rel, "..") || rel == "." || strings.Contains(rel, "/") || strings.Contains(rel, "\\") {
+	// Resolve symlinks on the job directory to get its canonical real path
+	realJobDir, err := filepath.EvalSymlinks(jobDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "backup directory not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to access backup directory")
+		return
+	}
+	realJobDir = filepath.Clean(realJobDir)
+
+	// Resolve symlinks on the target path to get its canonical real path
+	realTarget, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "backup file not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to access backup file")
+		return
+	}
+	realTarget = filepath.Clean(realTarget)
+
+	// Ensure the fully resolved realTarget resides strictly within the realJobDir
+	rel, err := filepath.Rel(realJobDir, realTarget)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
 		writeError(w, http.StatusBadRequest, "path traversal attempt detected")
 		return
 	}
 
-	info, err := os.Stat(targetPath)
+	info, err := os.Stat(realTarget)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeError(w, http.StatusNotFound, "backup file not found")
@@ -223,7 +264,7 @@ func (sc *ServerContext) HandleDownloadBackup(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", baseFilename))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
-	http.ServeFile(w, r, targetPath)
+	http.ServeFile(w, r, realTarget)
 }
 
 // HandleGetLogs handles GET /api/jobs/{name}/logs.
@@ -244,7 +285,14 @@ func (sc *ServerContext) HandleGetLogs(w http.ResponseWriter, r *http.Request, j
 
 // HandleGetConfig handles GET /api/config.
 func (sc *ServerContext) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
-	cfgPath := sc.Config.ConfigPath
+	cfg := sc.GetConfig()
+	cfgPath := ""
+	if cfg != nil {
+		cfgPath = cfg.ConfigPath
+	}
+	if cfgPath == "" {
+		cfgPath = os.Getenv("CONFIG_PATH")
+	}
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read config file %q: %v", cfgPath, err))
@@ -297,16 +345,23 @@ func (sc *ServerContext) HandleSaveConfig(w http.ResponseWriter, r *http.Request
 	}
 
 	// Persist to actual config path
-	cfgPath := sc.Config.ConfigPath
+	currentCfg := sc.GetConfig()
+	cfgPath := ""
+	if currentCfg != nil {
+		cfgPath = currentCfg.ConfigPath
+	}
+	if cfgPath == "" {
+		cfgPath = os.Getenv("CONFIG_PATH")
+	}
 	if err := os.WriteFile(cfgPath, body, 0644); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save configuration: %v", err))
 		return
 	}
 
 	newCfg.ConfigPath = cfgPath
-	sc.Config = newCfg
+	sc.SetConfig(newCfg)
 
-	// Hot-reload scheduler
+	// Hot-reload scheduler safely
 	if err := sc.Scheduler.Reload(newCfg); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("configuration saved, but scheduler reload failed: %v", err))
 		return

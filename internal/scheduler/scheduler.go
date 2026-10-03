@@ -168,6 +168,8 @@ func (s *Scheduler) RunJob(ctx context.Context, job config.JobConfig) error {
 		return fmt.Errorf("job %q is already running", job.Name)
 	}
 	s.runningJobs[job.Name] = true
+	// Snapshot active configuration under lock so this run finishes safely on its snapshot
+	cfgSnapshot := s.config
 	s.mu.Unlock()
 
 	defer func() {
@@ -182,7 +184,11 @@ func (s *Scheduler) RunJob(ctx context.Context, job config.JobConfig) error {
 	now := time.Now()
 	startTime := now
 
-	jobDir := filepath.Join(s.config.BackupDir, job.Name)
+	backupDir := ""
+	if cfgSnapshot != nil {
+		backupDir = cfgSnapshot.BackupDir
+	}
+	jobDir := filepath.Join(backupDir, job.Name)
 	if err := os.MkdirAll(jobDir, 0755); err != nil {
 		runErr := fmt.Errorf("failed to create backup directory %q: %w", jobDir, err)
 		s.handleFailure(job, startTime, runErr, "")

@@ -189,7 +189,7 @@ func TestRoutes_AuthFlow(t *testing.T) {
 func TestRoutes_RunJobAndCSRF(t *testing.T) {
 	sc, handler, _, _ := setupTestServer(t, "mypassword", false)
 	sess, _ := sc.Auth.Authenticate("127.0.0.1", "mypassword")
-	cookie := CreateSessionCookie(sess.Token, 3600)
+	cookie := CreateSessionCookie(nil, sess.Token, 3600)
 
 	// POST /api/jobs/test-job/run without CSRF -> 403 Forbidden
 	req := httptest.NewRequest(http.MethodPost, "/api/jobs/test-job/run", nil)
@@ -214,7 +214,7 @@ func TestRoutes_RunJobAndCSRF(t *testing.T) {
 func TestRoutes_PathTraversalProtection(t *testing.T) {
 	sc, handler, _, backupDir := setupTestServer(t, "pass", false)
 	sess, _ := sc.Auth.Authenticate("127.0.0.1", "pass")
-	cookie := CreateSessionCookie(sess.Token, 3600)
+	cookie := CreateSessionCookie(nil, sess.Token, 3600)
 
 	// Create valid backup file in job folder
 	jobDir := filepath.Join(backupDir, "test-job")
@@ -271,7 +271,7 @@ func TestRoutes_ConfigViewAndEdit(t *testing.T) {
 	// Case 1: Read-only config (writable=false)
 	sc, handler, _, _ := setupTestServer(t, "pass", false)
 	sess, _ := sc.Auth.Authenticate("127.0.0.1", "pass")
-	cookie := CreateSessionCookie(sess.Token, 3600)
+	cookie := CreateSessionCookie(nil, sess.Token, 3600)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	req.AddCookie(cookie)
@@ -318,3 +318,135 @@ jobs:
 		t.Fatalf("expected 200 OK for config save, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
+
+func TestRoutes_LogoutCSRF(t *testing.T) {
+	sc, handler, _, _ := setupTestServer(t, "pass", false)
+	sess, _ := sc.Auth.Authenticate("127.0.0.1", "pass")
+	cookie := CreateSessionCookie(nil, sess.Token, 3600)
+
+	// 1. GET /logout -> 405 Method Not Allowed
+	req := httptest.NewRequest(http.MethodGet, "/logout", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for GET /logout, got %d", w.Code)
+	}
+
+	// 2. POST /logout without CSRF -> 403 Forbidden
+	req = httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for POST /logout without CSRF, got %d", w.Code)
+	}
+
+	// 3. POST /logout with invalid CSRF -> 403 Forbidden
+	req = httptest.NewRequest(http.MethodPost, "/logout", strings.NewReader("csrf_token=wrong"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for POST /logout with bad CSRF, got %d", w.Code)
+	}
+
+	// 4. POST /logout with valid CSRF in form -> 303 Redirect to /login
+	req = httptest.NewRequest(http.MethodPost, "/logout", strings.NewReader("csrf_token="+sess.CSRFToken))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("expected 303 Redirect for valid logout, got %d", w.Code)
+	}
+
+	// Session should now be revoked
+	if _, ok := sc.Auth.ValidateSession(sess.Token); ok {
+		t.Errorf("expected session to be revoked after logout")
+	}
+}
+
+func TestRoutes_SymlinkTraversal(t *testing.T) {
+	sc, handler, _, backupDir := setupTestServer(t, "pass", false)
+	sess, _ := sc.Auth.Authenticate("127.0.0.1", "pass")
+	cookie := CreateSessionCookie(nil, sess.Token, 3600)
+
+	// Create a secret sensitive file outside the backup directory
+	secretDir := t.TempDir()
+	secretFile := filepath.Join(secretDir, "sensitive.txt")
+	_ = os.WriteFile(secretFile, []byte("super-secret-system-data"), 0600)
+
+	// Create job directory
+	jobDir := filepath.Join(backupDir, "test-job")
+	_ = os.MkdirAll(jobDir, 0755)
+
+	// Create a malicious symlink inside job directory pointing to the sensitive file outside
+	symlinkPath := filepath.Join(jobDir, "test-job_malicious.dump")
+	if err := os.Symlink(secretFile, symlinkPath); err != nil {
+		t.Fatalf("failed to create symlink: %v", err)
+	}
+
+	// Attempt to download the symlinked file
+	req := httptest.NewRequest(http.MethodGet, "/api/jobs/test-job/backups/test-job_malicious.dump/download", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	// Must be blocked (400 Bad Request)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for symlink traversal, got %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "super-secret") {
+		t.Fatalf("CRITICAL: leaked sensitive data through symlink!")
+	}
+}
+
+func TestRoutes_LoginRateLimiting429(t *testing.T) {
+	_, handler, _, _ := setupTestServer(t, "correctpassword", false)
+
+	// Make 5 failed attempts
+	for i := 0; i < 5; i++ {
+		form := url.Values{}
+		form.Set("password", "badpassword")
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: expected 401 Unauthorized, got %d", i, w.Code)
+		}
+	}
+
+	// 6th attempt should return 429 Too Many Requests with Retry-After header
+	form := url.Values{}
+	form.Set("password", "correctpassword")
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 Too Many Requests, got %d", w.Code)
+	}
+	if retryAfter := w.Header().Get("Retry-After"); retryAfter != "60" {
+		t.Errorf("expected Retry-After: 60, got %q", retryAfter)
+	}
+
+	// Also verify JSON accept returns 429 JSON
+	reqJSON := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	reqJSON.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	reqJSON.Header.Set("Accept", "application/json")
+	wJSON := httptest.NewRecorder()
+	handler.ServeHTTP(wJSON, reqJSON)
+
+	if wJSON.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 for JSON request, got %d", wJSON.Code)
+	}
+	if retryAfter := wJSON.Header().Get("Retry-After"); retryAfter != "60" {
+		t.Errorf("expected Retry-After: 60, got %q", retryAfter)
+	}
+}
+
+

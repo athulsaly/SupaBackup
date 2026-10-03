@@ -4,10 +4,17 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"fmt"
+	"errors"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
+)
+
+var (
+	ErrRateLimited     = errors.New("too many failed login attempts; please try again later")
+	ErrInvalidPassword = errors.New("invalid password")
 )
 
 const (
@@ -63,7 +70,7 @@ func (a *AuthManager) Authenticate(clientIP, password string) (*Session, error) 
 		}
 		a.failedLogins[clientIP] = valid
 		if len(valid) >= MaxFailedLogins {
-			return nil, fmt.Errorf("too many failed login attempts; please try again later")
+			return nil, ErrRateLimited
 		}
 	}
 
@@ -71,7 +78,7 @@ func (a *AuthManager) Authenticate(clientIP, password string) (*Session, error) 
 	match := subtle.ConstantTimeCompare([]byte(password), []byte(a.password)) == 1
 	if !match {
 		a.failedLogins[clientIP] = append(a.failedLogins[clientIP], now)
-		return nil, fmt.Errorf("invalid password")
+		return nil, ErrInvalidPassword
 	}
 
 	// Successful login: clear failed attempts for this IP
@@ -126,14 +133,40 @@ func (a *AuthManager) ValidateCSRF(session *Session, token string) bool {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(session.CSRFToken)) == 1
 }
 
-// CreateSessionCookie returns an HttpOnly, SameSite=Strict session cookie.
-func CreateSessionCookie(token string, maxAge int) *http.Cookie {
+// DetermineCookieSecure determines whether the session cookie should include the Secure attribute.
+// Controlled via DASHBOARD_COOKIE_SECURE=true|false|auto (default auto).
+// Under auto, Secure is set if the request is TLS or X-Forwarded-Proto is https.
+func DetermineCookieSecure(r *http.Request) bool {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("DASHBOARD_COOKIE_SECURE")))
+	switch mode {
+	case "true", "1", "yes":
+		return true
+	case "false", "0", "no":
+		return false
+	case "auto", "":
+		if r != nil {
+			if r.TLS != nil {
+				return true
+			}
+			if strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// CreateSessionCookie returns an HttpOnly, SameSite=Strict session cookie with Secure flag determined by request/config.
+func CreateSessionCookie(r *http.Request, token string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		Secure:   DetermineCookieSecure(r),
 		MaxAge:   maxAge,
 	}
 }
