@@ -62,12 +62,18 @@ services:
       - PGID=568
       - TZ=UTC
       - CONFIG_PATH=/etc/supabackup/config.yaml
-      - BACKUP_DIR=/backups
-      - SUPABASE_DB_URL=postgresql://postgres.[PROJECT-REF]:[PASSWORD]@aws-0-us-east-1.pooler.supabase.com:5432/postgres
-      - SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+      - SUPABASE_DB_URL=${SUPABASE_DB_URL:-}
+      - MYSQL_DB_URL=${MYSQL_DB_URL:-}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
     volumes:
       - /mnt/tank/supabase-backups:/backups
       - /mnt/tank/app-configs/supabackup/config.yaml:/etc/supabackup/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "/bin/supabackup", "check"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 ```
 
 ---

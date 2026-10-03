@@ -18,6 +18,7 @@ FROM alpine:3.21
 RUN apk add --no-cache \
     postgresql17-client \
     mariadb-client \
+    mariadb-connector-c \
     su-exec \
     tzdata \
     ca-certificates
