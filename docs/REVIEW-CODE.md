@@ -15,3 +15,15 @@ All NO-GO items have been successfully addressed:
 3. **Secret Leakage in Logs for MySQL DSNs**: Fixed. The redaction logic was updated to correctly catch and redact DSN-style credentials in error logs and status output.
 
 The implementation is now safe and correct. Ready for merge pending CI re-test.
+
+
+## Dashboard (Commit 3ec0064)
+
+**NO-GO**
+
+The dashboard implementation is solid in its XSS prevention, vanilla JS UI, and password-based disabling mechanism, but contains the following critical security and concurrency issues that block merging:
+
+1. **Missing Secure Flag on Session Cookie** (`internal/web/auth.go:130`): `CreateSessionCookie` sets `HttpOnly` and `SameSite`, but omits `Secure: true`. The session cookie must require HTTPS to prevent network interception of tokens.
+2. **Missing CSRF Validation on Logout** (`internal/web/routes.go:82`): The `/logout` route is defined outside the API dispatcher and does not validate the `csrf_token` that the UI sends, making the session vulnerable to cross-site logout.
+3. **Data Race in Config Hot-Reload** (`internal/web/api.go:307`): `HandleSaveConfig` completely replaces the `sc.Config` pointer without holding a mutex. Meanwhile, `internal/scheduler/scheduler.go:185` (`RunJob`) reads from `s.config` without locking, creating a concurrent read/write data race that can crash the daemon when a job runs during a reload.
+4. **Symlink Path Traversal in Downloads** (`internal/web/api.go:208`): `HandleDownloadBackup` uses `os.Stat(targetPath)` which automatically resolves symlinks. A malicious symlink placed inside the backup directory pointing to a sensitive system file would be served for download. You must use `os.Lstat` or `filepath.EvalSymlinks` to ensure the final absolute path strictly resides within the isolated `jobDir`.
