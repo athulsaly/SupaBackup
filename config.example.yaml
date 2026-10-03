@@ -1,0 +1,26 @@
+# SupaBackup Example Configuration
+# Mount this file into /etc/supabackup/config.yaml or configure CONFIG_PATH.
+
+jobs:
+  # Supabase PostgreSQL Backup Job
+  - name: "supabase-prod"
+    engine: "postgres"
+    schedule: "0 2 * * *" # Daily at 02:00 UTC
+    retention_days: 14
+    url_env: "SUPABASE_DB_URL" # Looks up $SUPABASE_DB_URL or $SUPABASE_DB_URL_FILE
+    webhook_url_env: "SLACK_WEBHOOK_URL" # Optional alert endpoint
+
+  # Secondary PostgreSQL database (e.g. Neon or AWS RDS)
+  - name: "postgres-secondary"
+    engine: "postgres"
+    schedule: "0 3 * * *" # Daily at 03:00 UTC
+    retention_days: 7
+    url_env: "SECONDARY_DB_URL"
+
+  # MySQL / MariaDB Backup Job
+  - name: "mysql-app"
+    engine: "mysql"
+    schedule: "0 4 * * 0" # Weekly on Sunday at 04:00 UTC
+    retention_days: 30
+    url_env: "MYSQL_DB_URL" # Looks up $MYSQL_DB_URL or $MYSQL_DB_URL_FILE
+    webhook_url_env: "DISCORD_WEBHOOK_URL"
