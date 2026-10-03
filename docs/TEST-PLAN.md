@@ -19,10 +19,10 @@ The following matrix maps every acceptance criterion from [docs/PRD.md](file:///
 
 | PRD AC # | Requirement | Test ID | Test Name | Level | Verification Method |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **AC-1** | Engine Support (PostgreSQL & MySQL/MariaDB in MVP, Mongo design) | `TC-ENG-01`<br>`TC-ENG-02`<br>`TC-ENG-03` | Postgres Backup Execution<br>MySQL Backup Execution<br>Engine Interface Conformance | Integration<br>Integration<br>Unit | Run backup against throwaway Postgres 17 and MySQL 8; verify engine interface stubs for MongoDB. |
-| **AC-2** | Postgres Client Version (`pg_dump` >= 15/17) | `TC-IMG-01` | Postgres Client Compatibility | Container / Smoke | Execute `pg_dump --version` inside the container image and assert major version >= 17 (or 15+). |
+| **AC-1** | Engine Support (PostgreSQL & MySQL/MariaDB in MVP via postgresql17-client & mariadb-client) | `TC-ENG-01`<br>`TC-ENG-02`<br>`TC-ENG-03` | Postgres Backup Execution<br>MySQL Backup Execution<br>Engine Interface Conformance | Integration<br>Integration<br>Unit | Run backup against throwaway Postgres 17 and MySQL 8 (verifying mariadb-client works against MySQL 8); verify engine interface stubs for MongoDB. |
+| **AC-2** | Postgres Client Version (`pg_dump` >= 17 via `postgresql17-client`) | `TC-IMG-01` | Postgres Client Compatibility | Container / Smoke | Execute `pg_dump --version` inside the container image and assert major version >= 17. |
 | **AC-3** | Container Base (Alpine minimal, non-root PUID/PGID 568 default) | `TC-SEC-01`<br>`TC-SEC-02` | Non-Root TrueNAS Permissions<br>Image Footprint Check | Integration<br>Container / Smoke | Assert process runs as UID:GID 568; verify write permissions to `/backups`; check image size < 150MB. |
-| **AC-4** | Multi-Job YAML Config & Secrets via Env / `*_FILE` | `TC-CFG-01`<br>`TC-CFG-02`<br>`TC-SEC-03` | Multi-Job Config Parsing<br>`*_FILE` Secret Resolution<br>Log Redaction / No Leaks | Unit<br>Unit & Integration<br>Integration | Load YAML with multiple jobs; test `connection_uri_file` reading from Docker secret; assert stdout does not log connection strings or passwords. |
+| **AC-4** | Multi-Job YAML Config (url_env, webhook_url_env) & Secrets via Env / `*_FILE` | `TC-CFG-01`<br>`TC-CFG-02`<br>`TC-SEC-03` | Multi-Job Config Parsing<br>`*_FILE` Secret Resolution<br>Log Redaction / No Leaks | Unit<br>Unit & Integration<br>Integration | Load YAML with multiple jobs using `url_env`; test `*_FILE` secret resolution; assert stdout does not log connection strings or passwords. |
 | **AC-5** | Built-in Cron Scheduler (no host cron) | `TC-SCH-01`<br>`TC-SCH-02` | Cron Expression Parsing<br>Scheduled Triggering | Unit<br>Integration | Unit tests for standard cron expressions (e.g. `0 2 * * *`, `@every 5s`); test job trigger dispatch in goroutine. |
 | **AC-6** | Backup Output Naming & Custom Format | `TC-OUT-01`<br>`TC-OUT-02` | Output File Naming Format<br>Postgres Custom Format Check | Integration<br>Integration | Assert output filename matches `<job-name>_YYYY-MM-DD_HH-mm.dump`; verify Postgres dump header magic bytes match `PGDMP`. |
 | **AC-7** | Validation & Non-Zero Exit on Failure | `TC-VAL-01`<br>`TC-VAL-02`<br>`TC-VAL-03` | Dump Integrity & Non-Empty Check<br>`pg_restore --list` Verification<br>Fault Injection (Bad Creds/Unreachable DB) | Integration<br>Integration<br>Integration | Check file size > 0; execute `pg_restore --list <dump>` and assert table schema contents; inject bad host and assert error exit & failure notification. |
@@ -41,7 +41,7 @@ Unit tests are fast, in-memory tests running without external Docker dependencie
   - Default values assignment (`PUID=568`, `PGID=568`, `retention_days=14`, `BACKUP_DIR=/backups`).
   - Resolution of `${ENV_VAR}` interpolations.
   - Resolution of `*_FILE` paths (reading secret files from `/var/run/secrets/...`).
-  - Invalid configuration rejection (missing engine, malformed cron, missing connection URI).
+  - Invalid configuration rejection (missing engine, malformed cron, missing url_env).
 * **`internal/retention`:**
   - Filename timestamp parser handling `<job-name>_2026-10-01_02-00.dump`.
   - Date difference calculation based on `retention_days`.
