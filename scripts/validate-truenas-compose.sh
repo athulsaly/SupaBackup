@@ -63,7 +63,7 @@ if echo "$COMPOSE_CONTENT" | grep -qE "user:\s*[\"']?0(:0)?[\"']?|user:\s*[\"']?
     fail "Explicit root execution detected ('user: root' or 'user: 0'). TrueNAS apps must run non-root."
 elif echo "$COMPOSE_CONTENT" | grep -qE "user:\s*[\"']?568(:568)?[\"']?"; then
     pass "Container explicitly configured to run as user 568 ('user: 568:568')."
-elif echo "$COMPOSE_CONTENT" | grep -qE "(PUID|puid):\s*[\"']?568[\"']?" && echo "$COMPOSE_CONTENT" | grep -qE "(PGID|pgid):\s*[\"']?568[\"']?"; then
+elif echo "$COMPOSE_CONTENT" | grep -qE "(-?\s*(PUID|puid)(=|:\s*)[\"']?568[\"']?)" && echo "$COMPOSE_CONTENT" | grep -qE "(-?\s*(PGID|pgid)(=|:\s*)[\"']?568[\"']?)"; then
     pass "Container specifies PUID=568 and PGID=568 environment variables."
 else
     fail "No non-root user (568:568) or PUID/PGID 568 configuration found for TrueNAS compatibility."
