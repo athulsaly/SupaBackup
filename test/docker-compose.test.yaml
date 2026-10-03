@@ -1,0 +1,59 @@
+services:
+  test-postgres:
+    image: postgres:17-alpine
+    container_name: supabackup-test-postgres
+    environment:
+      POSTGRES_DB: testdb
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+    ports:
+      - "127.0.0.1:54322:5432"
+    volumes:
+      - ./seed/postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  test-mysql:
+    image: mysql:8.4
+    container_name: supabackup-test-mysql
+    environment:
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: testuser
+      MYSQL_PASSWORD: testpass
+      MYSQL_ROOT_PASSWORD: rootpass
+    ports:
+      - "127.0.0.1:33066:3306"
+    volumes:
+      - ./seed/mysql.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-prootpass"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  supabackup-app:
+    image: ${IMAGE_NAME:-supabackup:local}
+    container_name: supabackup-test-runner
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+      test-mysql:
+        condition: service_healthy
+    environment:
+      PUID: "568"
+      PGID: "568"
+      CONFIG_PATH: /etc/supabackup/config.yaml
+      BACKUP_DIR: /backups
+      TEST_POSTGRES_URL: "postgresql://testuser:testpass@test-postgres:5432/testdb?sslmode=disable"
+      TEST_MYSQL_URL: "mysql://testuser:testpass@test-mysql:3306/testdb"
+    volumes:
+      - ./config.test.yaml:/etc/supabackup/config.yaml:ro
+      - ./work/backups:/backups
+      - ./work/run:/var/run/supabackup
+    profiles:
+      - app

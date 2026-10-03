@@ -1,0 +1,138 @@
+name: SupaBackup CI & Quality Gate
+
+on:
+  push:
+    branches:
+      - main
+      - 'feat/**'
+      - 'qa/**'
+      - 'docs/**'
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Go Lint & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Check Go Module
+        id: check-go
+        run: |
+          if [ -f go.mod ]; then
+            echo "has_go=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_go=false" >> $GITHUB_OUTPUT
+            echo "::notice ::No go.mod present yet. Waiting on Kevin's feat/mvp commit."
+          fi
+
+      - name: Run Go Vet
+        if: steps:check-go.outputs.has_go == 'true'
+        run: go vet ./...
+
+      - name: Run Go Unit Tests
+        if: steps:check-go.outputs.has_go == 'true'
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+  docker-build:
+    name: Docker Build & Client Tool Smoke Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: Check Dockerfile
+        id: check-dockerfile
+        run: |
+          if [ -f Dockerfile ]; then
+            echo "has_dockerfile=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_dockerfile=false" >> $GITHUB_OUTPUT
+            echo "::notice ::No Dockerfile present yet. Waiting on Kevin's feat/mvp commit."
+          fi
+
+      - name: Build SupaBackup Docker Image
+        if: steps:check-dockerfile.outputs.has_dockerfile == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          tags: supabackup:local
+          load: true
+
+      - name: Verify Client Versions & Non-Root Execution
+        if: steps:check-dockerfile.outputs.has_dockerfile == 'true'
+        run: |
+          echo "--- Verifying pg_dump client version ---"
+          docker run --rm supabackup:local pg_dump --version
+          
+          echo "--- Verifying mysqldump client version ---"
+          docker run --rm supabackup:local mysqldump --version
+          
+          echo "--- Verifying non-root user execution ---"
+          USER_ID=$(docker run --rm supabackup:local id -u)
+          echo "Container User ID: $USER_ID"
+          if [ "$USER_ID" = "0" ]; then
+            echo "Error: Container runs as root (UID 0)!"
+            exit 1
+          fi
+
+  integration-tests:
+    name: Integration Test Harness (Postgres 17 & MySQL 8)
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: actions/setup-buildx-action@v3
+
+      - name: Build Docker Image if Dockerfile exists
+        run: |
+          if [ -f Dockerfile ]; then
+            docker build -t supabackup:local .
+          else
+            echo "::notice ::Building without app image; harness will run client baseline validation."
+          fi
+
+      - name: Run Integration Tests
+        run: |
+          chmod +x test/run-integration-tests.sh
+          ./test/run-integration-tests.sh
+
+  truenas-validation:
+    name: TrueNAS Compose Specification Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Make Validator Executable
+        run: chmod +x scripts/validate-truenas-compose.sh
+
+      - name: Validate TrueNAS Reference Fixture
+        run: ./scripts/validate-truenas-compose.sh test/fixtures/docker-compose.truenas.yaml
+
+      - name: Validate Root Compose File (if present)
+        run: |
+          if [ -f docker-compose.yaml ]; then
+            ./scripts/validate-truenas-compose.sh docker-compose.yaml
+          else
+            echo "::notice ::Root docker-compose.yaml not present yet; waiting on Kevin."
+          fi

@@ -1,0 +1,12 @@
+# Test work directories & runtime files
+test/work/
+*.dump
+*.sql.gz
+coverage.out
+
+# OS metadata
+.DS_Store
+
+# Go binaries
+bin/
+dist/

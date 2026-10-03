@@ -1,0 +1,15 @@
+# SupaBackup Test Configuration for Integration Test Harness
+jobs:
+  - name: test-postgres
+    engine: postgres
+    schedule: "* * * * *"
+    connection_uri: "${TEST_POSTGRES_URL}"
+    retention_days: 14
+    webhook_url: ""
+
+  - name: test-mysql
+    engine: mysql
+    schedule: "* * * * *"
+    connection_uri: "${TEST_MYSQL_URL}"
+    retention_days: 7
+    webhook_url: ""
