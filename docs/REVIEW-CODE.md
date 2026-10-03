@@ -27,3 +27,16 @@ The dashboard implementation is solid in its XSS prevention, vanilla JS UI, and 
 2. **Missing CSRF Validation on Logout** (`internal/web/routes.go:82`): The `/logout` route is defined outside the API dispatcher and does not validate the `csrf_token` that the UI sends, making the session vulnerable to cross-site logout.
 3. **Data Race in Config Hot-Reload** (`internal/web/api.go:307`): `HandleSaveConfig` completely replaces the `sc.Config` pointer without holding a mutex. Meanwhile, `internal/scheduler/scheduler.go:185` (`RunJob`) reads from `s.config` without locking, creating a concurrent read/write data race that can crash the daemon when a job runs during a reload.
 4. **Symlink Path Traversal in Downloads** (`internal/web/api.go:208`): `HandleDownloadBackup` uses `os.Stat(targetPath)` which automatically resolves symlinks. A malicious symlink placed inside the backup directory pointing to a sensitive system file would be served for download. You must use `os.Lstat` or `filepath.EvalSymlinks` to ensure the final absolute path strictly resides within the isolated `jobDir`.
+
+
+## Dashboard round 2
+
+**GO**
+
+All four critical issues have been successfully addressed:
+1. **Secure Cookie:** Added `DetermineCookieSecure` to automatically apply the `Secure` flag on HTTPS or proxy environments, with a `DASHBOARD_COOKIE_SECURE` override.
+2. **Logout CSRF:** `POST /logout` now correctly checks and validates the `X-CSRF-Token` against the active session.
+3. **Config Data Race:** Scheduler's `RunJob` now snapshots `s.config` under the mutex lock to prevent concurrent data races during hot reloads. `ServerContext` also correctly protects config reassignment with a lock.
+4. **Symlink Traversal:** `HandleDownloadBackup` now resolves real paths via `filepath.EvalSymlinks()` and rigorously checks if the resolved path stays within the backup directory.
+
+The dashboard implementation is secure and ready for merge.
