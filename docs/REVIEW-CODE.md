@@ -1,0 +1,5 @@
+NO-GO
+
+1. **Secret Leakage in Process Table** (`internal/engine/postgres.go:27`): `pg_dump` receives the database URL (`job.URL`) as a direct command-line argument. This exposes the plaintext password to `ps aux` and other process monitors. The connection string should be passed via `PGPASSWORD` (or equivalent environment variables) to keep it out of the process arguments.
+2. **Missing Supabase Flags** (`internal/engine/postgres.go:27`): `pg_dump` is missing critical flags required for managed databases like Supabase. It must include `--no-owner` and `--no-privileges` to prevent restore errors caused by lack of superuser rights, and it should exclude managed schemas (e.g., `--exclude-schema=supabase_functions`).
+3. **Secret Leakage in Logs for MySQL DSNs** (`internal/config/config.go:196`): The `RedactURL` function uses a regex (`://([^:]+):([^@]+)@`) that fails to redact MySQL DSNs (e.g., `user:pass@tcp(...)`). If a connection fails, the plaintext password will not be matched and will be written directly to the logs and the status JSON.
