@@ -27,8 +27,9 @@ type JobConfig struct {
 	Engine         string `yaml:"engine"`
 	Schedule       string `yaml:"schedule"`
 	RetentionDays  int    `yaml:"retention_days"`
-	URLEnv         string `yaml:"url_env"`
-	WebhookURLEnv  string `yaml:"webhook_url_env,omitempty"`
+	URLEnv         string   `yaml:"url_env"`
+	WebhookURLEnv  string   `yaml:"webhook_url_env,omitempty"`
+	ExcludeSchemas []string `yaml:"exclude_schemas,omitempty"`
 
 	// Resolved runtime values (never serialized to YAML or logged with secrets)
 	URL        string `yaml:"-"`
@@ -46,7 +47,6 @@ type AppConfig struct {
 }
 
 var jobNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-]+$`)
-var passwordRegex = regexp.MustCompile(`://([^:]+):([^@]+)@`)
 
 // Load reads configuration from the given path (or CONFIG_PATH env), resolves environment variables and *_FILE secrets.
 func Load(explicitPath string) (*AppConfig, error) {
@@ -187,11 +187,20 @@ func resolveIntEnv(envName string, configVal, defaultVal int) int {
 	return defaultVal
 }
 
-// RedactURL strips passwords and tokens from connection strings and URLs for safe logging.
-func RedactURL(rawURL string) string {
-	if rawURL == "" {
+var userPassRegex = regexp.MustCompile(`([a-zA-Z0-9_\-\.]+):([^@/\s"';]+)@`)
+var keyValuePasswordRegex = regexp.MustCompile(`(?i)\b(password|passwd|pwd)\s*=\s*([^\s&;,]+)`)
+
+// RedactURL strips passwords and tokens from connection strings, DSNs, key-value strings, and error messages.
+func RedactURL(raw string) string {
+	if raw == "" {
 		return ""
 	}
 
-	return passwordRegex.ReplaceAllString(rawURL, `://$1:***@`)
+	// 1. Redact user:password@ (covers URI schemes and DSNs like user:pass@tcp(...))
+	redacted := userPassRegex.ReplaceAllString(raw, `$1:***@`)
+
+	// 2. Redact password=... key-value patterns
+	redacted = keyValuePasswordRegex.ReplaceAllString(redacted, `$1=***`)
+
+	return redacted
 }

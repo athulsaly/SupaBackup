@@ -61,19 +61,21 @@ func TestCheckFileSize(t *testing.T) {
 func TestPostgresEngine_Backup(t *testing.T) {
 	var executedName string
 	var executedArgs []string
+	var executedCmd *exec.Cmd
 
 	mockRunner := func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		executedName = name
 		executedArgs = args
-		// Return dummy command that succeeds (e.g. true or echo)
-		return exec.Command("true")
+		executedCmd = exec.Command("true")
+		return executedCmd
 	}
 
 	p := NewPostgresEngine(mockRunner)
 	job := config.JobConfig{
-		Name:   "supa",
-		Engine: "postgres",
-		URL:    "postgresql://postgres:secret@localhost:5432/postgres",
+		Name:           "supa",
+		Engine:         "postgres",
+		URL:            "postgresql://postgres:secretpassword@localhost:5432/postgres",
+		ExcludeSchemas: []string{"supabase_functions"},
 	}
 
 	targetPath := "/tmp/test.dump"
@@ -86,14 +88,44 @@ func TestPostgresEngine_Backup(t *testing.T) {
 		t.Errorf("expected executable pg_dump, got %q", executedName)
 	}
 
-	expectedArgs := []string{job.URL, "--format=custom", "--file=" + targetPath}
-	if len(executedArgs) != len(expectedArgs) {
-		t.Fatalf("expected args %+v, got %+v", expectedArgs, executedArgs)
+	joinedArgs := strings.Join(executedArgs, " ")
+	// Ensure password is NEVER in command-line arguments
+	if strings.Contains(joinedArgs, "secretpassword") {
+		t.Errorf("secret leaked in process arguments: %s", joinedArgs)
 	}
-	for i := range expectedArgs {
-		if executedArgs[i] != expectedArgs[i] {
-			t.Errorf("arg[%d]: expected %q, got %q", i, expectedArgs[i], executedArgs[i])
+
+	if !strings.Contains(joinedArgs, "--format=custom") {
+		t.Errorf("expected --format=custom in args, got: %s", joinedArgs)
+	}
+	if !strings.Contains(joinedArgs, "--file="+targetPath) {
+		t.Errorf("expected --file in args, got: %s", joinedArgs)
+	}
+	if !strings.Contains(joinedArgs, "-h localhost") {
+		t.Errorf("expected -h localhost in args, got: %s", joinedArgs)
+	}
+	if !strings.Contains(joinedArgs, "-p 5432") {
+		t.Errorf("expected -p 5432 in args, got: %s", joinedArgs)
+	}
+	if !strings.Contains(joinedArgs, "-U postgres") {
+		t.Errorf("expected -U postgres in args, got: %s", joinedArgs)
+	}
+	if !strings.Contains(joinedArgs, "-d postgres") {
+		t.Errorf("expected -d postgres in args, got: %s", joinedArgs)
+	}
+	if !strings.Contains(joinedArgs, "--exclude-schema=supabase_functions") {
+		t.Errorf("expected --exclude-schema in args, got: %s", joinedArgs)
+	}
+
+	// Verify password is passed via PGPASSWORD environment variable
+	foundPGPassword := false
+	for _, env := range executedCmd.Env {
+		if env == "PGPASSWORD=secretpassword" {
+			foundPGPassword = true
+			break
 		}
+	}
+	if !foundPGPassword {
+		t.Errorf("expected PGPASSWORD in cmd.Env, got: %+v", executedCmd.Env)
 	}
 }
 

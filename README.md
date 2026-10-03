@@ -136,7 +136,11 @@ pg_restore --list /backups/supabase-prod/supabase-prod_2026-10-03_02-00.dump
 ```
 
 #### 2. Full Database Restore
-To restore into a fresh database instance:
+
+> [!NOTE]
+> When using PostgreSQL custom format dumps (`--format=custom`), ownership and privilege metadata are captured in the archive. To prevent restore errors when targeting cloud-hosted databases without superuser rights (e.g. Supabase, Neon, AWS RDS), always supply `--no-owner` and `--no-privileges` at `pg_restore` time.
+
+To restore into a database instance:
 ```bash
 pg_restore \
   --dbname="$RESTORE_TARGET_URL" \

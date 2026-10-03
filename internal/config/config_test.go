@@ -18,6 +18,9 @@ jobs:
     retention_days: 14
     url_env: "TEST_DB_URL"
     webhook_url_env: "TEST_WEBHOOK_URL"
+    exclude_schemas:
+      - "supabase_functions"
+      - "extensions"
   - name: "mysql-legacy"
     engine: "mysql"
     schedule: "0 4 * * 0"
@@ -61,6 +64,9 @@ jobs:
 	}
 	if job1.WebhookURL != "https://discord.com/api/webhooks/test" {
 		t.Errorf("unexpected job1 WebhookURL: %s", job1.WebhookURL)
+	}
+	if len(job1.ExcludeSchemas) != 2 || job1.ExcludeSchemas[0] != "supabase_functions" || job1.ExcludeSchemas[1] != "extensions" {
+		t.Errorf("unexpected job1 ExcludeSchemas: %+v", job1.ExcludeSchemas)
 	}
 
 	job2 := cfg.Jobs[1]
@@ -158,31 +164,73 @@ jobs:
 
 func TestRedactURL(t *testing.T) {
 	testCases := []struct {
+		name     string
 		input    string
 		expected string
 	}{
 		{
+			name:     "Supabase session pooler URI",
 			input:    "postgresql://postgres.myref:supersecretpassword@aws-0-us-east-1.pooler.supabase.com:5432/postgres",
 			expected: "postgresql://postgres.myref:***@aws-0-us-east-1.pooler.supabase.com:5432/postgres",
 		},
 		{
+			name:     "MySQL URI",
 			input:    "mysql://user:mypassword@db.example.com:3306/production",
 			expected: "mysql://user:***@db.example.com:3306/production",
 		},
 		{
+			name:     "MySQL DSN format with host and port",
+			input:    "dbuser:secretpwd@tcp(127.0.0.1:3306)/appdb",
+			expected: "dbuser:***@tcp(127.0.0.1:3306)/appdb",
+		},
+		{
+			name:     "MySQL DSN format with parameters",
+			input:    "dbuser:secretpwd@tcp(mysql.internal:3306)/appdb?parseTime=true",
+			expected: "dbuser:***@tcp(mysql.internal:3306)/appdb?parseTime=true",
+		},
+		{
+			name:     "Key-value connection string",
+			input:    "host=localhost port=5432 user=myuser password=secretpass dbname=mydb",
+			expected: "host=localhost port=5432 user=myuser password=*** dbname=mydb",
+		},
+		{
+			name:     "Key-value connection string with uppercase key",
+			input:    "host=127.0.0.1 Password=secret123 dbname=app",
+			expected: "host=127.0.0.1 Password=*** dbname=app",
+		},
+		{
+			name:     "Error string containing MySQL DSN secret",
+			input:    "mysqldump: Got error connecting to dbuser:supersecret@tcp(mysql.internal:3306)/mydb: access denied",
+			expected: "mysqldump: Got error connecting to dbuser:***@tcp(mysql.internal:3306)/mydb: access denied",
+		},
+		{
+			name:     "Error string containing key-value password",
+			input:    "error: connection to postgres failed with password=badpassword (exit 1)",
+			expected: "error: connection to postgres failed with password=*** (exit 1)",
+		},
+		{
+			name:     "URL query parameter with password",
+			input:    "https://example.com/db?password=supersecret&user=admin",
+			expected: "https://example.com/db?password=***&user=admin",
+		},
+		{
+			name:     "URL without password",
 			input:    "postgres://localhost:5432/db",
 			expected: "postgres://localhost:5432/db",
 		},
 		{
+			name:     "Empty string",
 			input:    "",
 			expected: "",
 		},
 	}
 
 	for _, tc := range testCases {
-		got := RedactURL(tc.input)
-		if got != tc.expected {
-			t.Errorf("RedactURL(%q) = %q, expected %q", tc.input, got, tc.expected)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got := RedactURL(tc.input)
+			if got != tc.expected {
+				t.Errorf("RedactURL(%q) = %q, expected %q", tc.input, got, tc.expected)
+			}
+		})
 	}
 }

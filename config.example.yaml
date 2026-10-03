@@ -9,6 +9,11 @@ jobs:
     retention_days: 14
     url_env: "SUPABASE_DB_URL" # Looks up $SUPABASE_DB_URL or $SUPABASE_DB_URL_FILE
     webhook_url_env: "SLACK_WEBHOOK_URL" # Optional alert endpoint
+    # Optional per-job list of schemas to exclude from dump (mapped to --exclude-schema)
+    # Note: Do not exclude auth or storage schemas by default as they contain critical user data.
+    # exclude_schemas:
+    #   - "supabase_functions"
+    #   - "extensions"
 
   # Secondary PostgreSQL database (e.g. Neon or AWS RDS)
   - name: "postgres-secondary"
