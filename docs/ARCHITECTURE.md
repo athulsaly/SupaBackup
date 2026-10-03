@@ -4,8 +4,8 @@
 SupaBackup is a lightweight, standalone daemon designed to automatically back up cloud-hosted databases (PostgreSQL, MySQL/MariaDB) to a local TrueNAS dataset.
 
 * **Language:** **Go (Golang)**. Go is chosen because it produces a single, statically linked binary, ensuring the final Docker image remains exceptionally small. It also boasts excellent standard libraries for concurrency (needed for scheduling), HTTP (webhooks, health checks), and YAML parsing.
-* **Base Image:** **Alpine Linux**. Alpine keeps the image minimal. The image will install `postgresql-client` (ensuring `pg_dump` >= 15/17) and `mysql-client`. 
-* **Privileges:** The container will support `PUID` and `PGID` environment variables. By default, it will drop privileges using `su-exec` or a dedicated entrypoint script to run the backup process as the specified non-root user (e.g., TrueNAS `apps` UID 568), ensuring the TrueNAS dataset permissions remain pristine.
+* **Base Image:** **Alpine Linux**. Alpine keeps the image minimal. The image will install `postgresql17-client` (ensuring `pg_dump` >= 17) and `mariadb-client` (must verify the dump works against MySQL 8). 
+* **Privileges:** The container will support `PUID` and `PGID` environment variables. By default, it will drop privileges using `su-exec` or a dedicated entrypoint script to run the backup process as the specified non-root user (defaulting to TrueNAS `apps` UID/GID 568), ensuring the TrueNAS dataset permissions remain pristine.
 
 ## 2. Module Layout
 The Go project will follow a standard layout:
@@ -34,22 +34,21 @@ type Engine interface {
 * **Mongo Engine:** Stub implementation for MVP; designed to eventually wrap `mongodump`.
 
 ## 4. Configuration Schema
-Jobs are defined in a YAML configuration file (`/etc/supabackup/config.yaml`), with sensitive fields injectable via environment variables or Docker Swarm/Compose secrets (`*_FILE`).
+Jobs are defined in a YAML configuration file (`/etc/supabackup/config.yaml`), with sensitive fields sourced exclusively from environment variables or `*_FILE` equivalents.
 
 ```yaml
 jobs:
   - name: "supabase-main"
     engine: "postgres"
     schedule: "0 2 * * *" # Daily at 2 AM
-    connection_uri: "${SUPABASE_DB_URL}" # Resolved from env
-    # Alternatively: connection_uri_file: "/var/run/secrets/db_password"
+    url_env: SUPABASE_DB_URL # Engine looks up $SUPABASE_DB_URL or $SUPABASE_DB_URL_FILE
     retention_days: 14
-    webhook_url: "https://discord.com/api/webhooks/..."
+    webhook_url_env: SLACK_WEBHOOK_URL # Optional webhook
 
   - name: "mysql-legacy"
     engine: "mysql"
     schedule: "0 4 * * 0" # Weekly on Sunday
-    connection_uri: "${MYSQL_DB_URL}"
+    url_env: MYSQL_DB_URL
     retention_days: 30
 ```
 
