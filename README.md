@@ -30,7 +30,7 @@ It features first-class support for **Supabase (PostgreSQL)**, generic PostgreSQ
 3. Set the dataset permissions so the built-in TrueNAS `apps` user (UID `568`, GID `568`) has read/write access.
 
 ### 2. Prepare Configuration
-Create a configuration file `config.yaml` on your NAS or host:
+Create a configuration directory and file on your TrueNAS dataset, e.g. at `/mnt/tank/supabase-backups/config/config.yaml`:
 
 ```yaml
 jobs:
@@ -54,7 +54,7 @@ In TrueNAS SCALE, go to **Apps** > **Discover Apps** > **Custom App** (or **Inst
 ```yaml
 services:
   supabackup:
-    image: supabackup:latest
+    image: ghcr.io/athulsaly/supabackup:latest
     container_name: supabackup
     restart: unless-stopped
     environment:
@@ -62,18 +62,35 @@ services:
       - PGID=568
       - TZ=UTC
       - CONFIG_PATH=/etc/supabackup/config.yaml
+      - BACKUP_DIR=/backups
       - SUPABASE_DB_URL=${SUPABASE_DB_URL:-}
       - MYSQL_DB_URL=${MYSQL_DB_URL:-}
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
     volumes:
       - /mnt/tank/supabase-backups:/backups
-      - /mnt/tank/app-configs/supabackup/config.yaml:/etc/supabackup/config.yaml:ro
+      - /mnt/tank/supabase-backups/config/config.yaml:/etc/supabackup/config.yaml:ro
     healthcheck:
       test: ["CMD", "/bin/supabackup", "check"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+```
+
+### 4. Local Build Fallback (TrueNAS Shell / Air-Gapped)
+If you prefer building the container image directly on your TrueNAS host shell instead of pulling from GHCR:
+```bash
+# 1. Open Shell in TrueNAS Web UI or SSH into host
+# 2. Clone the repository
+git clone https://github.com/athulsaly/SupaBackup.git
+cd SupaBackup
+
+# 3. Build the Docker image locally
+docker build -t supabackup:latest .
+
+# 4. In docker-compose.yaml, replace image with supabackup:latest:
+#    image: supabackup:latest
 ```
 
 ---

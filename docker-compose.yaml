@@ -1,9 +1,6 @@
 services:
   supabackup:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: supabackup:latest
+    image: ghcr.io/athulsaly/supabackup:latest
     container_name: supabackup
     restart: unless-stopped
     environment:
@@ -22,8 +19,8 @@ services:
     volumes:
       # TrueNAS SCALE dataset mount for backups
       - /mnt/tank/supabase-backups:/backups
-      # Configuration directory
-      - ./config.yaml:/etc/supabackup/config.yaml:ro
+      # TrueNAS SCALE absolute host path configuration mount
+      - /mnt/tank/supabase-backups/config/config.yaml:/etc/supabackup/config.yaml:ro
     healthcheck:
       test: ["CMD", "/bin/supabackup", "check"]
       interval: 30s
